@@ -55,6 +55,7 @@ updater worker instance.
 - [Architecture](docs/architecture.md)
 - [API contract](docs/api.md)
 - [Development and testing](docs/development.md)
+- [Readiness checklist](docs/readiness.md)
 
 ## Repository ownership
 
