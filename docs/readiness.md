@@ -20,8 +20,10 @@ The following snapshot was taken on 2026-08-19:
 - The extractor build currently emits 153 compiler warnings, primarily
   nullability and hidden-member warnings. They do not block the proof of
   concept, but the production code paths should be audited separately.
-- The accepted EAM cache contains 14,655 renderable IDs, a roughly 2.48 MB JSON
-  manifest, and a roughly 1.93 MB PNG atlas.
+- The accepted EAM cache contains 14,655 renderable IDs across multiple object
+  categories, a roughly 2.48 MB JSON manifest, and a roughly 1.93 MB PNG atlas.
+  The ID count is not an expected client download count: most records are not
+  item-like objects and EAM will request images only for objects it renders.
 - Docker and Docker Compose are installed on the development machine, but the
   Docker Desktop engine was not running during this review.
 
@@ -80,18 +82,20 @@ PostgreSQL `BYTEA` plus per-instance memory caching is the initial implementatio
 default. Before production deployment, confirm whether Maik's infrastructure
 already provides S3-compatible object storage or a static CDN origin.
 
-Individual content-addressed PNGs remain the preferred update format, but
-14,655 possible IDs makes request behavior important. The proof of concept must
-measure:
+Individual content-addressed PNGs remain the preferred update format. The full
+catalog contains 14,655 possible IDs, but clients are expected to request only
+the relevant, visible subset. The proof of concept must measure:
 
 - the number of unique image hashes;
 - total and average PNG storage after deduplication;
 - extraction and PNG-encoding time;
-- a realistic EAM vault view's cold and warm request counts; and
-- whether a full bootstrap ZIP is useful for a fresh installation.
+- per-category object counts; and
+- a realistic EAM vault view's cold and warm request counts.
 
-Do not add a bundle endpoint until these measurements show it is useful. EAM
-should lazy-load visible sprites and cache them locally by content hash.
+Do not add a full image bundle endpoint unless real client measurements show it
+is useful. EAM should request only relevant visible sprites and cache them
+locally by content hash. The API may split metadata catalogs by object kind so
+consumers do not need unrelated records.
 
 ### Database conventions
 
