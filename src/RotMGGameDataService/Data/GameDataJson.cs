@@ -19,7 +19,11 @@ public static class GameDataJson
         JsonSerializer.Deserialize<T>(bytes, Options)
         ?? throw new InvalidDataException($"Stored {typeof(T).Name} JSON was empty.");
 
-    public static string Hash<T>(T value) => Hash(Serialize(value));
+    public static string Hash<T>(T value)
+    {
+        var bytes = Serialize(value);
+        return Hash(bytes.AsSpan());
+    }
 
     public static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
