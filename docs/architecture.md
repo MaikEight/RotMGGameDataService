@@ -8,9 +8,8 @@ client duplicates work, increases application size, and introduces
 platform-specific packaging concerns. This service performs extraction once
 and publishes reusable results for all consumers.
 
-The production ASP.NET API will run in Kubernetes behind a load balancer with
-at least two instances. The update workload is infrequent and does not need to
-run in every API instance.
+The target production ASP.NET API runs behind a load balancer with at least two
+instances. The update workload is infrequent and runs in a separate worker.
 
 ## High-level design
 
@@ -40,8 +39,6 @@ The application has two modes:
 - `refresh`: performs the worker's check once and exits for development and
   recovery tasks.
 
-The exact command-line syntax will be finalized during implementation.
-
 ## Public update hints
 
 Clients often observe a new game build before the scheduled service check. An
@@ -56,10 +53,8 @@ URL. The API validates the hash shape, records or coalesces it in PostgreSQL,
 signals the updater worker, and immediately returns `202 Accepted`. The caller
 does not wait for the check or extraction.
 
-The planned signal uses PostgreSQL `LISTEN`/`NOTIFY` after persisting the hint,
-so no additional queue service is required. The persisted row and the worker's
-periodic fallback check ensure a notification lost during a restart is not
-lost as work.
+No queue service is required. The persisted row is authoritative and the worker
+polls pending state every ten seconds. Restarts therefore cannot lose work.
 
 When a reported hash differs from the latest published build, the worker makes
 one inexpensive request to Realm's official build-metadata endpoint. Only a
@@ -104,7 +99,7 @@ filesystem path.
 `RotMGAssetExtractor` remains a separate, generic C# library and is pinned to an
 exact Git commit. Service-specific mapping lives in this repository.
 
-For each item, the updater creates:
+For each renderable object, the updater creates:
 
 - A normalized metadata record.
 - A final transparent PNG tile with the agreed pixel-art scaling, centering,
@@ -127,7 +122,7 @@ with the consuming application.
 ## Build comparison
 
 The updater compares the new normalized records with the previous successful
-build by stable item ID:
+build by stable object ID:
 
 - **Added:** the ID did not exist previously.
 - **Modified:** its metadata hash or sprite hash changed.
@@ -148,38 +143,33 @@ Kubernetes container filesystems are ephemeral. Temporary downloads and
 generated files may use the container's temporary directory, but no published
 state relies on it.
 
-PostgreSQL is the initial source of truth. The planned logical model is:
+PostgreSQL is the source of truth. The implemented logical model is:
 
 ```text
 game_data_builds
-  build_hash, source_checksum, schema_version, generated_at,
-  manifest_bytes, manifest_hash
-
-build_items
-  build_hash, item_id, metadata, metadata_hash, sprite_hash
-
-build_player_stats
-  build_hash, stat_index, metadata, metadata_hash
-
-build_fame_bonuses
-  build_hash, bonus_id, metadata, metadata_hash
+  build_id, realm_build_hash, source_checksum, schema_version,
+  generated_at, manifest_json, manifest_hash, is_latest
 
 sprites
   sprite_hash, png_bytes, width, height, created_at
 
+build_sprites
+  build_id, sprite_hash
+
 build_diffs
-  from_build_hash, to_build_hash, diff_bytes, diff_hash
+  from_build_id, to_build_id, diff_json, diff_hash
 
 update_hints
   observed_build_hash, first_seen_at, last_seen_at, report_count
 
 refresh_state
-  last_checked_at, pending_hint_at, last_error
+  last_checked_at, last_successful_at, last_official_check_at,
+  pending_hint_at, last_error_at, last_error
 ```
 
-Exact SQL types, indexes, and migration tooling will be selected during the
-database implementation. Sprite rows are content-addressed and deduplicated.
-A sprite may be removed only when no retained build references it.
+The schema is created idempotently at process startup. Manifest and diff JSON
+are stored as deterministic UTF-8 bytes. Sprite rows are content-addressed and
+deduplicated, with explicit references from retained builds.
 
 Storing the initial output in PostgreSQL keeps deployment requirements small.
 If traffic or storage measurements justify it, sprite bytes can later move to
@@ -193,7 +183,8 @@ A new build is generated and validated before it becomes visible:
 2. Validate that required sections exist and item counts are plausible.
 3. Validate every generated image and calculate hashes.
 4. Insert missing content-addressed sprites.
-5. Insert the build, normalized records, and diff in one database transaction.
+5. Insert missing sprites, the build manifest, sprite references, and diff in
+   one database transaction.
 6. Commit the transaction, making the build available to API instances.
 
 A failed update never changes the latest successful build. Temporary files are
@@ -242,10 +233,9 @@ downloads only after the official endpoint reports a new build.
 
 ## Deployment model
 
-Development uses Docker Compose with PostgreSQL, one API instance, and one
-updater worker. The same worker mode supports a one-shot invocation for manual
-tests. A scale-test profile can add a local reverse proxy and multiple API
-instances.
+Development and single-host deployment use Docker Compose with PostgreSQL, two
+API instances, one updater worker, an NGINX gateway, and daily retained
+backups. The same worker mode supports a one-shot invocation for manual tests.
 
 Production uses the same image in two Kubernetes workloads:
 

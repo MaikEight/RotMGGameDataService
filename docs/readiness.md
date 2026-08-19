@@ -1,9 +1,10 @@
 # Readiness Checklist
 
-This document records the remaining validation work and infrastructure answers
-needed before the service is treated as production-ready. It is not intended to
-delay the proof of concept; the highest-risk checks are placed first so they can
-be resolved with small implementation spikes.
+This document records the original readiness questions and the measured
+answers that shaped the implementation. The Compose stack now implements and
+has exercised the critical extraction, publication, fallback, multi-instance,
+rate-limit, and backup paths. Infrastructure-specific TLS, public hostname,
+CDN policy, and Kubernetes ownership remain deployment decisions.
 
 ## Findings so far
 

@@ -1,18 +1,19 @@
 # API Contract
 
-This document defines the planned version 1 HTTP contract. It may change while
-the proof of concept is being implemented, but breaking changes must be
-reflected in the URL version or schema version before production use.
+This document describes the implemented version 1 HTTP contract.
 
 ## Conventions
 
 - Base path: `/api/v1`
-- JSON uses camel-case property names.
-- Build identifiers and SHA-256 values are lowercase hexadecimal strings.
-- Dates use UTC ISO 8601 timestamps.
-- Item IDs are represented as decimal strings when used as JSON object keys.
-- Errors use ASP.NET `ProblemDetails` responses.
-- Immutable responses support `ETag` and `If-None-Match`.
+- JSON property names use camel case.
+- Realm build hashes and source checksums are 32 lowercase hexadecimal
+  characters. Service build IDs and SHA-256 values are 64 characters.
+- Dates are UTC ISO 8601 timestamps.
+- Object IDs and player-stat indexes are decimal strings when used as JSON
+  object keys.
+- Errors use ASP.NET `ProblemDetails` or validation-problem responses.
+- Immutable resources support `ETag` and `If-None-Match`.
+- JSON responses support Brotli and gzip response compression.
 
 ## Get the latest build
 
@@ -20,51 +21,39 @@ reflected in the URL version or schema version before production use.
 GET /api/v1/builds/latest
 ```
 
-Example response:
-
 ```json
 {
   "schemaVersion": 1,
-  "buildHash": "aeceb1f212da9dcaba9e6c41a34c9d69",
+  "buildId": "5f7b6e64160ce740ec0b7c9efb8b0b71a21a0c80e76ec46cf1fd6f8ca27b84a9",
+  "realmBuildHash": "aeceb1f212da9dcaba9e6c41a34c9d69",
   "sourceChecksum": "c32dd849645d89ff0841eabfd8c17a67",
   "generatedAt": "2026-08-19T10:00:00Z",
-  "manifestUrl": "/api/v1/builds/aeceb1f212da9dcaba9e6c41a34c9d69/manifest",
-  "manifestSha256": "eaa6b80000000000000000000000000000000000000000000000000000000000"
+  "manifestUrl": "/api/v1/builds/5f7b6e64160ce740ec0b7c9efb8b0b71a21a0c80e76ec46cf1fd6f8ca27b84a9/manifest",
+  "manifestSha256": "728597600cce39011fb752a0f899f05c07e1a2db696d190ccb57e060d2e16588"
 }
 ```
 
-Clients should cache this response, send `If-None-Match` on later checks, and
-avoid checking repeatedly from different application components.
+The service build ID identifies the complete output contract. It includes the
+Realm source checksum, schema version, extractor version, and renderer version,
+so a renderer or mapping change can publish a new immutable build even when the
+Realm build has not changed.
 
-Suggested response caching:
-
-```http
-Cache-Control: public, max-age=300, stale-while-revalidate=300
-```
-
-The endpoint returns `503 Service Unavailable` when no successful build has
-ever been published. A failed refresh does not cause `503` when an older
-successful build exists.
+The response uses a five-minute cache lifetime and an ETag. It returns `503`
+only before the first successful publication; a failed later refresh leaves the
+last successful build available.
 
 ## Submit an update hint
 
 ```http
 POST /api/v1/update-hints
 Content-Type: application/json
-```
 
-```json
 {
   "observedBuildHash": "b14d91945492e348d572f7ae72f273cd"
 }
 ```
 
-This unauthenticated endpoint allows a client that has observed a different
-Realm build to request an asynchronous check. The supplied hash is only a hint;
-it is never trusted as proof that the build exists.
-
-The API validates and coalesces the hint in PostgreSQL, notifies the updater,
-and returns immediately:
+Successful validation returns immediately:
 
 ```http
 HTTP/1.1 202 Accepted
@@ -73,79 +62,95 @@ HTTP/1.1 202 Accepted
 ```json
 {
   "status": "accepted",
-  "checkQueued": true
+  "checkQueued": true,
+  "alreadyCurrent": false
 }
 ```
 
-`checkQueued` may be `false` when the hash is already current, the same hint is
-already pending, or the cluster-wide official-check cooldown is active. The
-client should continue using the latest published build and check the normal
-`latest` endpoint later; it must not wait or repeatedly submit the hint.
+The value is an untrusted signal. It is shape-validated, coalesced in
+PostgreSQL, and may wake the worker. Only Realm's configured official metadata
+endpoint can authorize a download. Callers cannot supply an upstream URL,
+filesystem path, or checksum.
 
-The first mismatched hint outside the cooldown causes one check against Realm's
-official metadata. Extraction occurs only when the official response confirms
-a build different from the latest published build. Random or repeated hashes
-cannot directly trigger downloads.
+`checkQueued` may be false when the hash is already current, an equivalent
+hint is pending, or the cluster-wide official-check cooldown applies. Clients
+should return to the normal `latest` polling flow and must not wait on this
+request.
+
+Unknown JSON properties are rejected. The request body limit is 16 KiB and the
+endpoint requires `application/json`.
 
 ## Get a complete manifest
 
+Both the 64-character service build ID and its 32-character Realm build hash
+can identify a retained build:
+
 ```http
-GET /api/v1/builds/{buildHash}/manifest
+GET /api/v1/builds/{buildIdentifier}/manifest
 ```
 
-Example structure:
+The manifest structure is:
 
 ```json
 {
   "schemaVersion": 1,
-  "buildHash": "aeceb1f212da9dcaba9e6c41a34c9d69",
+  "buildId": "service-build-sha256",
+  "realmBuildHash": "realm-build-md5",
+  "sourceChecksum": "resources-assets-md5",
   "generatedAt": "2026-08-19T10:00:00Z",
-  "items": {
-    "1234": {
-      "id": 1234,
-      "name": "Example Item",
-      "slotType": 1,
-      "tier": 12,
-      "feedPower": 450,
-      "bagType": 4,
-      "soulbound": false,
-      "rarity": "tiered",
-      "isShiny": false,
-      "spriteHash": "a8f2930000000000000000000000000000000000000000000000000000000000",
-      "spriteUrl": "/api/v1/sprites/a8f2930000000000000000000000000000000000000000000000000000000000.png"
+  "objects": {
+    "10022": {
+      "id": 10022,
+      "internalName": "Sword Rune",
+      "kind": "Equipment",
+      "class": "Equipment",
+      "displayName": null,
+      "equipment": {
+        "slotType": 10,
+        "bagType": 4,
+        "feedPower": 750,
+        "tier": 0,
+        "itemTier": 0,
+        "powerLevel": 0,
+        "rarity": null,
+        "soulbound": true,
+        "consumable": true,
+        "dropTradable": false,
+        "usable": false,
+        "mpCost": 0,
+        "cooldown": 0,
+        "seasonalOnly": false,
+        "enchantmentSlots": false,
+        "shiny": false
+      },
+      "spriteHash": "sprite-sha256",
+      "metadataHash": "metadata-sha256"
     }
   },
   "playerStats": {
     "13": {
       "index": 13,
       "id": "PirateCavesCompleted",
+      "reportEvery": 1,
+      "dungeon": true,
       "displayName": "Pirate Cave",
-      "isDungeon": true,
-      "dungeonId": "PirateCave"
+      "displayColor": null,
+      "displayOnDeath": true,
+      "dungeonId": "PirateCave",
+      "metadataHash": "metadata-sha256"
     }
   },
-  "fameBonuses": [
-    {
-      "id": "TunnelRat",
-      "code": 0,
-      "displayGroup": "Dungeon Bonuses",
-      "displayCategory": "Dungeon Collection",
-      "displayName": "Tunnel Rat",
-      "absoluteBonus": 3000,
-      "relativeBonus": 7.5,
-      "maxRepeatCount": 0,
-      "repeatable": false,
-      "conditions": []
-    }
-  ]
+  "fameBonuses": [],
+  "playerStatsHash": "section-sha256",
+  "fameBonusesHash": "section-sha256"
 }
 ```
 
-The complete manifest is intended for a fresh installation, cache recovery, or
-a client that does not implement diffs. HTTP compression should be enabled;
-JSON metadata is expected to compress well.
+`objects` is deliberately neutral: the Realm client contains renderable
+equipment, tokens, portals, characters, and other object categories. A
+consumer decides which kinds it needs.
 
-The response is immutable for the lifetime of the retained build:
+The response is immutable:
 
 ```http
 Cache-Control: public, max-age=31536000, immutable
@@ -155,49 +160,39 @@ ETag: "<manifest-sha256>"
 ## Get a build diff
 
 ```http
-GET /api/v1/builds/{toBuildHash}/diff?from={fromBuildHash}
+GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
 ```
-
-Example response:
 
 ```json
 {
   "schemaVersion": 1,
-  "fromBuild": "old-build-hash",
-  "toBuild": "new-build-hash",
-  "addedItems": {
-    "1234": {
-      "id": 1234,
-      "name": "New Item",
-      "spriteHash": "new-sprite-hash",
-      "spriteUrl": "/api/v1/sprites/new-sprite-hash.png"
-    }
-  },
-  "modifiedItems": {},
-  "removedItemIds": [991],
+  "fromBuildId": "old-service-build-sha256",
+  "toBuildId": "new-service-build-sha256",
+  "addedObjects": {},
+  "modifiedObjects": {},
+  "removedObjectIds": [],
   "playerStats": null,
   "fameBonuses": null
 }
 ```
 
-`playerStats` and `fameBonuses` are `null` when unchanged. When either section
-changes, the response contains its complete replacement rather than attempting
-to patch deeply nested records in the first API version.
+Added and modified entries contain complete `GameObjectRecord` values.
+`playerStats` and `fameBonuses` are null when unchanged and complete replacement
+sections when changed. A missing retained diff returns `404`; the client should
+then download the target manifest.
 
-Clients must download and verify all newly referenced sprites before replacing
-their locally active manifest. If a delta is unavailable because the source
-build has expired, the API returns `404 Not Found` and the client downloads the
-complete target manifest.
+Clients should download and verify every newly referenced sprite before
+atomically replacing their local active manifest.
 
 ## Get a sprite
 
 ```http
-GET /api/v1/sprites/{spriteHash}.png
+GET /api/v1/sprites/{spriteSha256}.png
 ```
 
-The response body is the exact PNG whose SHA-256 is used in the URL. Sprites
-are final transparent item tiles, ready to render without atlas coordinates or
-additional image processing.
+The body is the exact transparent PNG whose SHA-256 appears in the URL.
+Current renderer output is a final 40x40 tile suitable for EAM-style display.
+Different objects may share one sprite hash.
 
 ```http
 Content-Type: image/png
@@ -205,8 +200,15 @@ Cache-Control: public, max-age=31536000, immutable
 ETag: "<sprite-sha256>"
 ```
 
-An unchanged item retains the same sprite URL across builds. Two items may
-reference the same URL.
+## Get updater status
+
+```http
+GET /api/v1/status
+```
+
+The response reports the latest build IDs, check timestamps, whether a hint is
+pending, and whether the last refresh has an error. It never exposes the
+stored error message or secrets.
 
 ## Health endpoints
 
@@ -215,27 +217,18 @@ GET /health/live
 GET /health/ready
 ```
 
-- `live` indicates that the process is responsive and does not query external
-  dependencies.
-- `ready` verifies that the API can reach PostgreSQL and serve requests.
+`live` checks process responsiveness. `ready` checks PostgreSQL connectivity.
+Health routes are not rate limited.
 
-Health endpoints are intended for Docker and Kubernetes probes and are not
-rate limited.
+## Rate limits
 
-## Rate-limit behavior
+The built-in limits are per client and per API replica:
 
-The CDN or ingress owns the primary cluster-wide limits. ASP.NET adds a
-per-instance safety policy and returns:
+- Metadata: 180 requests per minute.
+- Sprites: 600 requests per minute.
+- Update hints: 6 requests per minute.
 
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 30
-```
-
-Metadata routes may use a conventional per-IP token bucket. Sprite routes must
-permit large legitimate bursts and should rely more heavily on CDN caching and
-concurrency limits than a low requests-per-minute limit.
-
-Update hints have a stricter per-client submission limit plus a cluster-wide
-cooldown for official metadata checks. They may wake the updater, but cannot
-select an upstream URL or force extraction of unverified content.
+Rejected requests return `429 Too Many Requests` with `Retry-After: 60`.
+Update-trigger abuse is additionally bounded by a PostgreSQL-backed five-minute
+official-check cooldown shared by all replicas. A public deployment should add
+cluster-wide ingress or CDN limits.
