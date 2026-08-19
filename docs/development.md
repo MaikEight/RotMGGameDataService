@@ -12,16 +12,18 @@ Planned services:
 | --- | --- |
 | `postgres` | Isolated PostgreSQL database with a named volume. |
 | `api` | ASP.NET application running in `serve` mode on port 8080. |
-| `updater` | One-shot invocation of the same image in `refresh` mode. |
+| `updater` | Single background worker that handles hints and scheduled checks. |
 | `gateway` | Optional scale-test reverse proxy for multiple API instances. |
 
 The Compose file and application do not exist yet. Once implemented, the
 target workflow is:
 
 ```powershell
-docker compose up --build -d postgres api
-docker compose run --rm updater
+docker compose up --build -d postgres api updater
 ```
+
+The worker will also support a one-shot refresh command for deterministic
+manual tests. Its final command syntax will be documented when implemented.
 
 Expected manual inspection points:
 
@@ -57,7 +59,8 @@ git submodule update --init --recursive
 - Receive production secrets from Kubernetes Secrets.
 - Keep Realm endpoints configurable for tests, while validating trusted hosts
   in production.
-- Do not include a public refresh endpoint.
+- Accept only an untrusted public update hint; never accept a client-selected
+  upstream URL or treat a reported hash as authorization to extract.
 
 Likely configuration sections include:
 
@@ -68,6 +71,7 @@ Realm__AllowedCdnHosts__0
 Storage__RetainedBuilds
 RateLimiting__MetadataPermitLimit
 RateLimiting__SpriteConcurrencyLimit
+UpdateHints__OfficialCheckCooldown
 ```
 
 Names remain provisional until the corresponding options classes exist.
@@ -85,6 +89,7 @@ Unit tests run without Docker or internet access and cover:
 - Mapping extractor models into stable API records.
 - Canonical metadata hashing.
 - Added, modified, removed, and unchanged comparisons.
+- Update-hint validation, coalescing, and global cooldown behavior.
 - Cache and ETag behavior.
 
 Small test fixtures are committed to the repository. The 47 MB game asset file
@@ -132,7 +137,11 @@ The first end-to-end acceptance sequence is:
    previous build remains available.
 7. Start two API instances behind the optional gateway and confirm both serve
    identical hashes and bytes.
-8. Point an EAM development build at the local API and compare representative
+8. Submit the same mismatched update hint from both API instances and confirm
+   the worker performs at most one official check.
+9. Submit random hashes during the cooldown and confirm they cannot trigger a
+   download or extraction.
+10. Point an EAM development build at the local API and compare representative
    item rendering with the accepted visual baseline.
 
 ### Client update test

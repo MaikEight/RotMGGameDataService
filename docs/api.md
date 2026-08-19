@@ -46,6 +46,47 @@ The endpoint returns `503 Service Unavailable` when no successful build has
 ever been published. A failed refresh does not cause `503` when an older
 successful build exists.
 
+## Submit an update hint
+
+```http
+POST /api/v1/update-hints
+Content-Type: application/json
+```
+
+```json
+{
+  "observedBuildHash": "b14d91945492e348d572f7ae72f273cd"
+}
+```
+
+This unauthenticated endpoint allows a client that has observed a different
+Realm build to request an asynchronous check. The supplied hash is only a hint;
+it is never trusted as proof that the build exists.
+
+The API validates and coalesces the hint in PostgreSQL, notifies the updater,
+and returns immediately:
+
+```http
+HTTP/1.1 202 Accepted
+```
+
+```json
+{
+  "status": "accepted",
+  "checkQueued": true
+}
+```
+
+`checkQueued` may be `false` when the hash is already current, the same hint is
+already pending, or the cluster-wide official-check cooldown is active. The
+client should continue using the latest published build and check the normal
+`latest` endpoint later; it must not wait or repeatedly submit the hint.
+
+The first mismatched hint outside the cooldown causes one check against Realm's
+official metadata. Extraction occurs only when the official response confirms
+a build different from the latest published build. Random or repeated hashes
+cannot directly trigger downloads.
+
 ## Get a complete manifest
 
 ```http
@@ -195,4 +236,6 @@ Metadata routes may use a conventional per-IP token bucket. Sprite routes must
 permit large legitimate bursts and should rely more heavily on CDN caching and
 concurrency limits than a low requests-per-minute limit.
 
-No public endpoint starts or forces a refresh.
+Update hints have a stricter per-client submission limit plus a cluster-wide
+cooldown for official metadata checks. They may wake the updater, but cannot
+select an upstream URL or force extraction of unverified content.

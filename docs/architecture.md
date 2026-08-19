@@ -15,32 +15,68 @@ run in every API instance.
 ## High-level design
 
 ```text
-Realm build metadata
-        |
-        v
-One-shot updater ---> RotMGAssetExtractor
-        |                    |
-        +---- generated game data and PNG sprites
-                             |
-                             v
-                         PostgreSQL
-                             |
-                    +--------+--------+
-                    |                 |
-                 API pod A         API pod B
-                    +--------+--------+
-                             |
-                      load balancer/CDN
-                             |
-                          consumers
+Realm build metadata --------> updater worker ---> RotMGAssetExtractor
+                                     ^                    |
+                                     |                    |
+                               update hints        generated data
+                                     |                    |
+                                     +------ PostgreSQL <-+
+                                              |
+                                     +--------+--------+
+                                     |                 |
+                                  API pod A         API pod B
+                                     +--------+--------+
+                                              |
+                                       load balancer/CDN
+                                              |
+                                           consumers
 ```
 
 The application has two modes:
 
-- `serve`: starts the read-only ASP.NET API.
-- `refresh`: checks for a new Realm build, publishes it if required, and exits.
+- `serve`: starts the ASP.NET API and accepts read requests and update hints.
+- `worker`: waits for update hints, performs scheduled checks, and publishes
+  confirmed builds.
+- `refresh`: performs the worker's check once and exits for development and
+  recovery tasks.
 
 The exact command-line syntax will be finalized during implementation.
+
+## Public update hints
+
+Clients often observe a new game build before the scheduled service check. An
+unauthenticated client may submit its observed build hash to:
+
+```http
+POST /api/v1/update-hints
+```
+
+The hint is untrusted and never directly starts a download from a client-chosen
+URL. The API validates the hash shape, records or coalesces it in PostgreSQL,
+signals the updater worker, and immediately returns `202 Accepted`. The caller
+does not wait for the check or extraction.
+
+The planned signal uses PostgreSQL `LISTEN`/`NOTIFY` after persisting the hint,
+so no additional queue service is required. The persisted row and the worker's
+periodic fallback check ensure a notification lost during a restart is not
+lost as work.
+
+When a reported hash differs from the latest published build, the worker makes
+one inexpensive request to Realm's official build-metadata endpoint. Only a
+different hash returned by that official endpoint can authorize downloading
+`resources.assets.gz` and running the extractor.
+
+Abuse is bounded in three ways:
+
+- Repeated reports of the same hash update one database record.
+- A cluster-wide cooldown permits at most one official metadata check during a
+  configured interval, initially five minutes.
+- A per-client rate limit rejects excessive hint submissions before they reach
+  the database.
+
+Random hashes can therefore produce at most one small official metadata request
+per cooldown period, not repeated downloads or extractions. Hints remain
+pending in PostgreSQL if the worker is temporarily unavailable.
 
 ## Source acquisition
 
@@ -133,6 +169,12 @@ sprites
 
 build_diffs
   from_build_hash, to_build_hash, diff_bytes, diff_hash
+
+update_hints
+  observed_build_hash, first_seen_at, last_seen_at, report_count
+
+refresh_state
+  last_checked_at, pending_hint_at, last_error
 ```
 
 Exact SQL types, indexes, and migration tooling will be selected during the
@@ -158,10 +200,9 @@ A failed update never changes the latest successful build. Temporary files are
 removed and the process exits with a non-zero status so Docker or Kubernetes
 can report the failure.
 
-PostgreSQL unique constraints make build publication idempotent. Kubernetes
-will additionally configure the updater CronJob with
-`concurrencyPolicy: Forbid`. A PostgreSQL advisory lock may be added as a
-defense-in-depth measure for manual or accidental concurrent refreshes.
+PostgreSQL unique constraints make build publication idempotent. The updater
+uses a PostgreSQL advisory lock so a manual one-shot refresh cannot overlap the
+long-running worker or another accidentally started worker instance.
 
 ## API scaling and caching
 
@@ -187,25 +228,30 @@ Rate limiting is applied in layers:
 - The CDN or Kubernetes ingress provides the primary cluster-wide policy.
 - ASP.NET provides a generous per-instance safety limit.
 - Metadata endpoints are limited per client IP.
+- Update hints are limited per client and share a PostgreSQL-backed global
+  check cooldown.
 - Sprite endpoints use generous burst and concurrency limits because one UI
   view may legitimately request many images.
 - Health endpoints are excluded.
 
 Forwarded client addresses are trusted only from configured load balancer
-proxies. Public requests cannot launch the updater. The updater checks metadata
-on a schedule, retries transient failures a small number of times with backoff
-and jitter, and downloads only after detecting a new checksum.
+proxies. Public hints may wake the updater, but cannot choose an upstream URL or
+authorize extraction. The updater also checks metadata on a schedule, retries
+transient failures a small number of times with backoff and jitter, and
+downloads only after the official endpoint reports a new build.
 
 ## Deployment model
 
-Development uses Docker Compose with PostgreSQL, one API instance, and a
-manually invoked one-shot updater. A scale-test profile can add a local reverse
-proxy and multiple API instances.
+Development uses Docker Compose with PostgreSQL, one API instance, and one
+updater worker. The same worker mode supports a one-shot invocation for manual
+tests. A scale-test profile can add a local reverse proxy and multiple API
+instances.
 
 Production uses the same image in two Kubernetes workloads:
 
 - A Deployment with at least two `serve` replicas.
-- A CronJob that invokes `refresh` every few hours and exits.
+- A Deployment with one lightweight `worker` replica.
 
-Checking every few hours is inexpensive. Extraction still occurs only when a
-new Realm build is detected, regardless of the schedule frequency.
+The worker wakes for persisted client hints and also checks every few hours as a
+fallback. Extraction still occurs only when Realm's official endpoint confirms
+a new build.

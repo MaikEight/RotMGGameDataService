@@ -18,6 +18,8 @@ item definitions, player-stat definitions, fame bonuses, or item sprites.
 - Download only the client file required by the extractor.
 - Reuse `TadusPro/RotMGAssetExtractor` as a pinned C# dependency.
 - Publish immutable, versioned game-data builds.
+- Let unauthenticated clients report an observed Realm build hash so an update
+  can be discovered quickly.
 - Represent each item image as a content-addressed PNG instead of a shared
   sprite atlas.
 - Track added, modified, removed, and unchanged records between builds.
@@ -28,7 +30,9 @@ item definitions, player-stat definitions, fame bonuses, or item sprites.
 ## Non-goals
 
 - Launching or updating a user's local Realm installation.
-- Triggering an extraction from an unauthenticated public HTTP request.
+- Trusting client-supplied hashes as proof of an update. Public update hints may
+  queue a rate-limited check against Realm's official metadata, but only the
+  official result can authorize a download and extraction.
 - Acting as a game proxy or handling Realm account credentials.
 - Reproducing client presentation details such as EAM-specific dungeon image
   paths.
@@ -38,13 +42,13 @@ item definitions, player-stat definitions, fame bonuses, or item sprites.
 | Component | Responsibility |
 | --- | --- |
 | ASP.NET API | Serves build metadata, manifests, diffs, and immutable sprites. |
-| One-shot updater | Checks Realm, downloads `resources.assets.gz`, extracts data, and publishes a build. |
+| Updater worker | Receives coalesced update hints, checks Realm periodically, and publishes confirmed builds. |
 | PostgreSQL | Stores build metadata, normalized records, sprite bytes, and checksums. |
 | CDN/load balancer | Caches immutable responses and absorbs public download traffic. |
 
 The API and updater will be two execution modes of the same application and
-Docker image. Kubernetes can run two or more API replicas and one scheduled
-updater CronJob.
+Docker image. Kubernetes can run two or more API replicas and one lightweight
+updater worker instance.
 
 ## Documentation
 
