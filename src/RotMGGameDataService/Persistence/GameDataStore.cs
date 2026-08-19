@@ -197,10 +197,18 @@ public sealed class GameDataStore(
             await InsertDiffAsync(connection, transaction, diff, cancellationToken);
         }
 
-        await using (var latestCommand = new NpgsqlCommand("""
-            UPDATE game_data_builds SET is_latest = false WHERE is_latest;
-            UPDATE game_data_builds SET is_latest = true WHERE build_id = $1;
-            """, connection, transaction))
+        await using (var clearLatestCommand = new NpgsqlCommand(
+                         "UPDATE game_data_builds SET is_latest = false WHERE is_latest",
+                         connection,
+                         transaction))
+        {
+            await clearLatestCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var latestCommand = new NpgsqlCommand(
+                         "UPDATE game_data_builds SET is_latest = true WHERE build_id = $1",
+                         connection,
+                         transaction))
         {
             latestCommand.Parameters.AddWithValue(extraction.Manifest.BuildId);
             await latestCommand.ExecuteNonQueryAsync(cancellationToken);
@@ -255,18 +263,31 @@ public sealed class GameDataStore(
             ON CONFLICT (observed_build_hash) DO UPDATE SET
                 last_seen_at = EXCLUDED.last_seen_at,
                 report_count = update_hints.report_count + 1,
-                processed_at = NULL;
-
-            UPDATE refresh_state
-            SET pending_hint_at = COALESCE(pending_hint_at, $2)
-            WHERE id = 1;
-
-            SELECT pg_notify('rotmg_update_hints', $1);
+                processed_at = NULL
             """, connection, transaction))
         {
             hintCommand.Parameters.AddWithValue(observedBuildHash);
             hintCommand.Parameters.AddWithValue(now);
             await hintCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var pendingStateCommand = new NpgsqlCommand("""
+            UPDATE refresh_state
+            SET pending_hint_at = COALESCE(pending_hint_at, $1)
+            WHERE id = 1
+            """, connection, transaction))
+        {
+            pendingStateCommand.Parameters.AddWithValue(now);
+            await pendingStateCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var notificationCommand = new NpgsqlCommand(
+                         "SELECT pg_notify('rotmg_update_hints', $1)",
+                         connection,
+                         transaction))
+        {
+            notificationCommand.Parameters.AddWithValue(observedBuildHash);
+            await notificationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         DateTime? lastOfficialCheck;
@@ -321,16 +342,32 @@ public sealed class GameDataStore(
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("""
+        await using (var stateCommand = new NpgsqlCommand("""
             UPDATE refresh_state
             SET last_successful_at = now(), pending_hint_at = NULL,
                 last_error_at = NULL, last_error = NULL
-            WHERE id = 1;
+            WHERE id = 1
+            """, connection, transaction))
+        {
+            await stateCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
 
-            UPDATE update_hints SET processed_at = now() WHERE processed_at IS NULL;
-            DELETE FROM update_hints WHERE processed_at < now() - interval '7 days';
-            """, connection, transaction);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await using (var processHintsCommand = new NpgsqlCommand(
+                         "UPDATE update_hints SET processed_at = now() WHERE processed_at IS NULL",
+                         connection,
+                         transaction))
+        {
+            await processHintsCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var cleanupHintsCommand = new NpgsqlCommand(
+                         "DELETE FROM update_hints WHERE processed_at < now() - interval '7 days'",
+                         connection,
+                         transaction))
+        {
+            await cleanupHintsCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
