@@ -1,6 +1,6 @@
 # RotMG Game Data Service
 
-RotMG Game Data Service is a proposed .NET 8 service that extracts public game
+RotMG Game Data Service is a .NET 8 service that extracts public game
 metadata and item images from the current Realm of the Mad God client and makes
 versioned results available through a read-only HTTP API.
 
@@ -8,9 +8,10 @@ The service is intentionally consumer-neutral. Exalt Account Manager can use
 it, but its contracts should also be useful to other tools that need current
 item definitions, player-stat definitions, fame bonuses, or item sprites.
 
-> Status: architecture and API planning. The service has not been implemented
-> yet, and the commands in the development guide describe the intended
-> developer experience.
+> Status: extraction proof of concept. Live Realm discovery, bounded download,
+> checksum verification, extraction, sprite rendering, and a Linux container
+> build work. PostgreSQL publication and the public data API are not yet
+> implemented.
 
 ## Goals
 
@@ -37,7 +38,7 @@ item definitions, player-stat definitions, fame bonuses, or item sprites.
 - Reproducing client presentation details such as EAM-specific dungeon image
   paths.
 
-## Planned components
+## Target components
 
 | Component | Responsibility |
 | --- | --- |
@@ -50,12 +51,41 @@ The API and updater will be two execution modes of the same application and
 Docker image. Kubernetes can run two or more API replicas and one lightweight
 updater worker instance.
 
+## Run the proof of concept
+
+Initialize the pinned extractor dependency and run the offline tests:
+
+```powershell
+git submodule update --init --recursive
+dotnet test RotMGGameDataService.sln
+```
+
+Run a live extraction on the host:
+
+```powershell
+dotnet run --project src/RotMGGameDataService -- refresh
+```
+
+Or run the same extraction in Linux. The named volume preserves the verified
+source file so later probes do not redownload it:
+
+```powershell
+docker build --tag rotmg-game-data-service:dev .
+docker run --rm --volume rotmg-game-data-probe:/data rotmg-game-data-service:dev refresh
+```
+
+This is a live smoke test: it downloads the current official Windows Realm
+resource archive. The current archive is about 47 MB and expands to about
+394 MB. See the [proof-of-concept results](docs/proof-of-concept.md) for the
+measured output and current memory limitation.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [API contract](docs/api.md)
 - [Development and testing](docs/development.md)
 - [Readiness checklist](docs/readiness.md)
+- [Proof-of-concept results](docs/proof-of-concept.md)
 
 ## Repository ownership
 

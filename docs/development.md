@@ -1,10 +1,11 @@
 # Development and Testing
 
-## Intended local environment
+## Local environment
 
-Development will use Docker Compose even when a developer already operates a
-PostgreSQL server. The isolated Compose database makes setup reproducible and
-prevents test data or migrations from affecting an existing database.
+The extraction proof can run either with the local .NET 8 SDK or in the Linux
+Docker image. Docker Compose will be added with PostgreSQL publication so the
+database and multi-instance behavior can be tested together without affecting
+an existing PostgreSQL server.
 
 Planned services:
 
@@ -15,25 +16,34 @@ Planned services:
 | `updater` | Single background worker that handles hints and scheduled checks. |
 | `gateway` | Optional scale-test reverse proxy for multiple API instances. |
 
-The Compose file and application do not exist yet. Once implemented, the
-target workflow is:
+The target workflow after PostgreSQL support is implemented is:
 
 ```powershell
 docker compose up --build -d postgres api updater
 ```
 
-The worker will also support a one-shot refresh command for deterministic
-manual tests. Its final command syntax will be documented when implemented.
+The current one-shot live extraction command is:
 
-Expected manual inspection points:
-
-```text
-http://localhost:8080/swagger
-http://localhost:8080/api/v1/builds/latest
+```powershell
+dotnet run --project src/RotMGGameDataService -- refresh
 ```
 
-Swagger is enabled only in development. Production deployments expose the
-documented read-only routes without an interactive API UI.
+The equivalent Linux-container smoke test is:
+
+```powershell
+docker build --tag rotmg-game-data-service:dev .
+docker run --rm --volume rotmg-game-data-probe:/data rotmg-game-data-service:dev refresh
+```
+
+The current proof API exposes only these inspection points:
+
+```text
+http://localhost:8080/
+http://localhost:8080/health/live
+```
+
+The planned data routes and Swagger UI will be added with persistence and API
+publication.
 
 ## Prerequisites
 
@@ -45,7 +55,7 @@ The service will reference `TadusPro/RotMGAssetExtractor` as a pinned Git
 submodule during the proof of concept. A versioned NuGet package can replace
 the submodule later if maintaining a package provides enough benefit.
 
-Planned checkout setup:
+Checkout setup:
 
 ```powershell
 git submodule update --init --recursive
@@ -92,8 +102,9 @@ Unit tests run without Docker or internet access and cover:
 - Update-hint validation, coalescing, and global cooldown behavior.
 - Cache and ETag behavior.
 
-Small test fixtures are committed to the repository. The 47 MB game asset file
-is not committed.
+Small test fixtures are committed to the repository. The live game asset file,
+which is currently roughly 47 MB compressed and 394 MB decompressed, is not
+committed.
 
 ### PostgreSQL integration tests
 

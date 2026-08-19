@@ -12,8 +12,9 @@ The following snapshot was taken on 2026-08-19:
 - Windows and macOS Realm app-init responses reported the same Realm build hash.
 - Their `resources.assets` files had different checksums and sizes, so the
   service must deliberately select a canonical source platform.
-- The current Windows `resources.assets` file was approximately 47 MB after
-  decompression.
+- The current Windows `resources.assets.gz` transfer was approximately 47 MB,
+  while the verified decompressed `resources.assets` file was approximately
+  394 MB. Download and extraction limits must treat these sizes separately.
 - The generic `net8.0` extractor target compiled with zero errors on Windows.
 - A NuGet vulnerability scan reported no known vulnerable direct or transitive
   packages from the configured sources.
@@ -24,8 +25,14 @@ The following snapshot was taken on 2026-08-19:
   categories, a roughly 2.48 MB JSON manifest, and a roughly 1.93 MB PNG atlas.
   The ID count is not an expected client download count: most records are not
   item-like objects and EAM will request images only for objects it renders.
-- Docker and Docker Compose are installed on the development machine, but the
-  Docker Desktop engine was not running during this review.
+- A live extraction completed on both Windows and Linux with identical visual
+  and PNG catalog hashes. It rendered all 14,655 objects into 6,201 unique
+  content-addressed PNGs totaling 2,566,427 bytes.
+- The extraction took approximately 16 seconds on Windows and 18 seconds in
+  Linux, but both runs peaked near 3.2 GB of working memory. That memory use is
+  the main issue to resolve before choosing production worker limits.
+- Full measurements and hashes are recorded in
+  [proof-of-concept results](proof-of-concept.md).
 
 These values are observations, not permanent API constants.
 
@@ -109,6 +116,11 @@ existing convention.
 ## Required implementation spikes
 
 ### 1. Linux extraction
+
+Completed for the first live source on 2026-08-19. The Linux output matched
+Windows exactly and had no native-library or case-sensitive-path failures.
+Peak memory was approximately 3.2 GB, so the extractor must either be optimized
+or the updater pod must be provisioned with a safely measured memory limit.
 
 Run the complete updater inside the intended Linux Docker image using the live
 canonical `resources.assets.gz` file. Record:
