@@ -23,7 +23,6 @@ COPY --from=build /app/publish/ ./
 ENV ASPNETCORE_HTTP_PORTS=8080 \
     Realm__WorkDirectory=/data
 EXPOSE 8080
-VOLUME ["/data"]
 
 USER app
 ENTRYPOINT ["dotnet", "RotMGGameDataService.dll"]

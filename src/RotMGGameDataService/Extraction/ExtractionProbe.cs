@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using AssetImageBuffer = RotMGAssetExtractor.Flatc.ImageBuffer;
 using RealmObject = RotMGAssetExtractor.Model.Object;
 using RotMGAssetExtractor.Model;
 using RotMGAssetExtractor.ModelHelpers;
+using RotMGGameDataService.Data;
 using RotMGGameDataService.Realm;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
@@ -15,7 +17,9 @@ using SixLabors.ImageSharp.Processing;
 
 namespace RotMGGameDataService.Extraction;
 
-public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
+public sealed class ExtractionProbe(
+    ILogger<ExtractionProbe> logger,
+    BuildIdentity buildIdentity)
 {
     private const int TileSize = 40;
     private const int IconSize = 32;
@@ -32,13 +36,15 @@ public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
         "Entrance",
     ];
 
-    public async Task<ExtractionProbeReport> RunAsync(
+    public async Task<ExtractionResult> RunAsync(
         string resourcesAssetsPath,
         RealmBuildInfo build,
         string workDirectory,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        var generatedAt = DateTimeOffset.UtcNow;
+        var buildId = buildIdentity.Calculate(build.Resource.Checksum);
         logger.LogInformation("Loading Realm resources from {ResourcesPath}", resourcesAssetsPath);
         await global::RotMGAssetExtractor.RotMGAssetExtractor.LoadLocalResourcesAsync(
             resourcesAssetsPath);
@@ -77,6 +83,8 @@ public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
 
         var visualHashes = new HashSet<string>(StringComparer.Ordinal);
         var pngHashes = new HashSet<string>(StringComparer.Ordinal);
+        var sprites = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var objectRecords = new SortedDictionary<string, GameObjectRecord>(StringComparer.Ordinal);
         var visualCatalogEntries = new List<string>(objectsById.Count);
         var pngCatalogEntries = new List<string>(objectsById.Count);
         long uniquePngBytes = 0;
@@ -111,10 +119,13 @@ public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
             visualHashes.Add(visualHash);
             visualCatalogEntries.Add($"{objectId}:{visualHash}");
             pngCatalogEntries.Add($"{objectId}:{pngHash}");
+            objectRecords[objectId.ToString(CultureInfo.InvariantCulture)] =
+                CreateObjectRecord(model, objectId, pngHash);
 
             if (pngHashes.Add(pngHash))
             {
                 uniquePngBytes += pngBytes.Length;
+                sprites[pngHash] = pngBytes;
                 var hashDirectory = Path.Combine(spriteDirectory, pngHash[..2]);
                 Directory.CreateDirectory(hashDirectory);
                 var spritePath = Path.Combine(hashDirectory, pngHash + ".png");
@@ -132,11 +143,25 @@ public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
             }
         }
 
+        var playerStats = CreatePlayerStats();
+        var fameBonuses = CreateFameBonuses();
+        var manifest = new GameDataManifest(
+            buildIdentity.SchemaVersion,
+            buildId,
+            build.BuildHash,
+            build.Resource.Checksum,
+            generatedAt,
+            objectRecords,
+            playerStats,
+            fameBonuses,
+            GameDataJson.Hash(playerStats),
+            GameDataJson.Hash(fameBonuses));
+
         stopwatch.Stop();
         var report = new ExtractionProbeReport(
             build.BuildHash,
             build.Resource.Checksum,
-            DateTimeOffset.UtcNow,
+            generatedAt,
             stopwatch.Elapsed,
             Process.GetCurrentProcess().PeakWorkingSet64,
             categoryCounts,
@@ -166,8 +191,123 @@ public sealed class ExtractionProbe(ILogger<ExtractionProbe> logger)
             report.RenderableObjectCount,
             report.UniquePngCount,
             report.Duration);
-        return report;
+        return new ExtractionResult(manifest, sprites, report);
     }
+
+    private static GameObjectRecord CreateObjectRecord(
+        RealmObject model,
+        int objectId,
+        string spriteHash)
+    {
+        var equipment = model as Equipment;
+        var equipmentData = equipment is null
+            ? null
+            : new EquipmentData(
+                equipment.SlotType,
+                equipment.BagType,
+                equipment.feedPower,
+                equipment.Tier,
+                equipment.ItemTier,
+                equipment.PowerLevel,
+                NullIfEmpty(equipment.Rarity),
+                equipment.Soulbound,
+                equipment.Consumable,
+                equipment.DropTradable,
+                equipment.Usable,
+                equipment.MpCost,
+                equipment.Cooldown,
+                equipment.SeasonalOnly,
+                equipment.EnchantmentSlots,
+                equipment.Labels?.Contains("shiny", StringComparison.OrdinalIgnoreCase) == true);
+
+        var record = new GameObjectRecord(
+            objectId,
+            model.id ?? string.Empty,
+            model.GetType().Name,
+            NullIfEmpty(model.Class),
+            NullIfEmpty(GetDisplayName(model)),
+            equipmentData,
+            spriteHash,
+            string.Empty);
+        return record with { MetadataHash = GameDataJson.Hash(record) };
+    }
+
+    private static SortedDictionary<string, PlayerStatRecord> CreatePlayerStats()
+    {
+        var records = new SortedDictionary<string, PlayerStatRecord>(StringComparer.Ordinal);
+        if (!global::RotMGAssetExtractor.RotMGAssetExtractor.BuildModelsByType.TryGetValue(
+                "PlayerStat",
+                out var models))
+        {
+            return records;
+        }
+
+        foreach (var stat in models.OfType<PlayerStat>().OrderBy(value => value.index))
+        {
+            var record = new PlayerStatRecord(
+                stat.index,
+                stat.id ?? string.Empty,
+                stat.reportEvery,
+                stat.dungeon,
+                NullIfEmpty(stat.displayName),
+                NullIfEmpty(stat.displayColor),
+                stat.displayOnDeath,
+                NullIfEmpty(stat.dungeonId),
+                string.Empty);
+            record = record with { MetadataHash = GameDataJson.Hash(record) };
+            records.TryAdd(stat.index.ToString(CultureInfo.InvariantCulture), record);
+        }
+
+        return records;
+    }
+
+    private static IReadOnlyList<FameBonusRecord> CreateFameBonuses()
+    {
+        if (!global::RotMGAssetExtractor.RotMGAssetExtractor.BuildModelsByType.TryGetValue(
+                "FameBonus",
+                out var models))
+        {
+            return [];
+        }
+
+        var records = new List<FameBonusRecord>();
+        foreach (var bonus in models
+                     .OfType<FameBonus>()
+                     .OrderBy(value => value.code)
+                     .ThenBy(value => value.id, StringComparer.Ordinal))
+        {
+            var conditions = (bonus.Condition ?? [])
+                .Select(condition => new FameConditionRecord(
+                    condition.threshold,
+                    NullIfEmpty(condition.stat),
+                    NullIfEmpty(condition.Value)))
+                .ToArray();
+            var record = new FameBonusRecord(
+                bonus.id ?? string.Empty,
+                bonus.code,
+                NullIfEmpty(bonus.DisplayGroup),
+                NullIfEmpty(bonus.DisplayCategory),
+                NullIfEmpty(bonus.DisplayName),
+                bonus.AbsoluteBonus,
+                bonus.RelativeBonus,
+                bonus.MaxRepeatCount,
+                bonus.Repeatable,
+                conditions,
+                string.Empty);
+            records.Add(record with { MetadataHash = GameDataJson.Hash(record) });
+        }
+
+        return records;
+    }
+
+    private static string? GetDisplayName(RealmObject model)
+    {
+        var property = model.GetType().GetProperty("DisplayId");
+        return property?.GetValue(model) as string;
+    }
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static ITexture? GetTexture(RealmObject model) => model switch
     {
