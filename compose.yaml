@@ -66,6 +66,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
+        umask 027
         while true; do
           stamp=$$(date -u +%Y%m%dT%H%M%SZ)
           partial="/backups/rotmg-game-data-$${stamp}.dump.partial"
