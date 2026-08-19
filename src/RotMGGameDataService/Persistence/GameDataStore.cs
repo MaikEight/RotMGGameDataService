@@ -281,15 +281,6 @@ public sealed class GameDataStore(
             await pendingStateCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var notificationCommand = new NpgsqlCommand(
-                         "SELECT pg_notify('rotmg_update_hints', $1)",
-                         connection,
-                         transaction))
-        {
-            notificationCommand.Parameters.AddWithValue(observedBuildHash);
-            await notificationCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
         DateTime? lastOfficialCheck;
         await using (var stateCommand = new NpgsqlCommand(
                          "SELECT last_official_check_at FROM refresh_state WHERE id = 1",

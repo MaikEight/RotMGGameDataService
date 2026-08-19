@@ -1,0 +1,9 @@
+FROM postgres:17.10-alpine
+
+# Apply fixes already published to the Alpine repositories. The upstream image
+# uses gosu only while starting as root; this stack starts directly as the
+# postgres UID, so remove that otherwise-unused Go binary from the runtime.
+RUN apk upgrade --no-cache \
+    && rm -f /usr/local/bin/gosu
+
+USER 70:70

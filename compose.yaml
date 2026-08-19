@@ -1,7 +1,7 @@
 name: rotmg-game-data-service
 
 x-app-environment: &app-environment
-  ConnectionStrings__GameData: Host=postgres;Port=5432;Database=rotmg_game_data;Username=rotmg_service;Password=${POSTGRES_PASSWORD};Pooling=true;Maximum Pool Size=50;Timeout=10;Command Timeout=30
+  ConnectionStrings__GameData: Host=postgres;Port=5432;Database=rotmg_game_data;Username=rotmg_service;Password=${POSTGRES_PASSWORD};Pooling=true;Maximum Pool Size=20;Timeout=10;Command Timeout=30
   Proxy__TrustForwardedHeaders: "true"
   DOTNET_EnableDiagnostics: "0"
 
@@ -34,7 +34,11 @@ x-api: &api
 
 services:
   postgres:
-    image: postgres:17.10-alpine
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.postgres
+    image: rotmg-game-data-postgres:local
+    user: "70:70"
     environment:
       POSTGRES_DB: rotmg_game_data
       POSTGRES_USER: rotmg_service
@@ -55,6 +59,45 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  backup:
+    image: rotmg-game-data-postgres:local
+    user: "70:70"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        while true; do
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+          partial="/backups/rotmg-game-data-$${stamp}.dump.partial"
+          final="/backups/rotmg-game-data-$${stamp}.dump"
+          pg_dump --host=postgres --username=rotmg_service --dbname=rotmg_game_data --format=custom --file="$$partial"
+          mv "$$partial" "$$final"
+          find /backups -type f -name 'rotmg-game-data-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${DATA_ROOT}/backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "find /backups -type f -name 'rotmg-game-data-*.dump' -mmin -1560 -print -quit | grep -q ."]
+      interval: 1h
+      timeout: 5s
+      retries: 2
+      start_period: 2m
 
   api-a:
     <<: *api
@@ -86,7 +129,10 @@ services:
       - outbound
 
   gateway:
-    image: nginx:1.28-alpine
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gateway
+    image: rotmg-game-data-gateway:local
     depends_on:
       api-a:
         condition: service_healthy
@@ -94,12 +140,8 @@ services:
         condition: service_healthy
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8090}:8080"
-    volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
     read_only: true
     tmpfs:
-      - /var/cache/nginx:size=64m,mode=0755
-      - /var/run:size=1m,mode=0755
       - /tmp:size=16m,mode=1777
     security_opt:
       - no-new-privileges:true
