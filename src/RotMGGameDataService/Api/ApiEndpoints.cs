@@ -70,7 +70,7 @@ public static class ApiEndpoints
             manifestSha256 = build.ManifestHash,
         };
         var bytes = GameDataJson.Serialize(response);
-        var etag = GameDataJson.Hash(bytes);
+        var etag = GameDataJson.HashBytes(bytes);
         return JsonPayload(context, bytes, etag, "public, max-age=300, stale-while-revalidate=300");
     }
 

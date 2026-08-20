@@ -150,7 +150,7 @@ public sealed class GameDataStore(
     {
         ValidateExtraction(extraction);
         var manifestBytes = GameDataJson.Serialize(extraction.Manifest);
-        var manifestHash = GameDataJson.Hash(manifestBytes);
+        var manifestHash = GameDataJson.HashBytes(manifestBytes);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -497,7 +497,7 @@ public sealed class GameDataStore(
         command.Parameters.AddWithValue(diff.FromBuildId);
         command.Parameters.AddWithValue(diff.ToBuildId);
         command.Parameters.AddWithValue(bytes);
-        command.Parameters.AddWithValue(GameDataJson.Hash(bytes));
+        command.Parameters.AddWithValue(GameDataJson.HashBytes(bytes));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

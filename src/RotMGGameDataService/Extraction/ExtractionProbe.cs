@@ -154,8 +154,8 @@ public sealed class ExtractionProbe(
             objectRecords,
             playerStats,
             fameBonuses,
-            GameDataJson.Hash(playerStats),
-            GameDataJson.Hash(fameBonuses));
+            GameDataJson.HashJson(playerStats),
+            GameDataJson.HashJson(fameBonuses));
 
         stopwatch.Stop();
         var report = new ExtractionProbeReport(
@@ -229,7 +229,7 @@ public sealed class ExtractionProbe(
             equipmentData,
             spriteHash,
             string.Empty);
-        return record with { MetadataHash = GameDataJson.Hash(record) };
+        return record with { MetadataHash = GameDataJson.HashJson(record) };
     }
 
     private static SortedDictionary<string, PlayerStatRecord> CreatePlayerStats()
@@ -254,7 +254,7 @@ public sealed class ExtractionProbe(
                 stat.displayOnDeath,
                 NullIfEmpty(stat.dungeonId),
                 string.Empty);
-            record = record with { MetadataHash = GameDataJson.Hash(record) };
+            record = record with { MetadataHash = GameDataJson.HashJson(record) };
             records.TryAdd(stat.index.ToString(CultureInfo.InvariantCulture), record);
         }
 
@@ -294,7 +294,7 @@ public sealed class ExtractionProbe(
                 bonus.Repeatable,
                 conditions,
                 string.Empty);
-            records.Add(record with { MetadataHash = GameDataJson.Hash(record) });
+            records.Add(record with { MetadataHash = GameDataJson.HashJson(record) });
         }
 
         return records;
