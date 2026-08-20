@@ -168,6 +168,11 @@ GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
   "schemaVersion": 1,
   "fromBuildId": "old-service-build-sha256",
   "toBuildId": "new-service-build-sha256",
+  "realmBuildHash": "realm-build-md5",
+  "sourceChecksum": "resources-assets-md5",
+  "generatedAt": "2026-08-19T10:00:00Z",
+  "playerStatsHash": "section-sha256",
+  "fameBonusesHash": "section-sha256",
   "addedObjects": {},
   "modifiedObjects": {},
   "removedObjectIds": [],
@@ -178,8 +183,9 @@ GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
 
 Added and modified entries contain complete `GameObjectRecord` values.
 `playerStats` and `fameBonuses` are null when unchanged and complete replacement
-sections when changed. A missing retained diff returns `404`; the client should
-then download the target manifest.
+sections when changed. The target metadata lets clients atomically reconstruct
+an internally complete target manifest. A missing retained diff returns `404`;
+the client should then download the target manifest.
 
 Clients should download and verify every newly referenced sprite before
 atomically replacing their local active manifest.

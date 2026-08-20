@@ -34,6 +34,9 @@ public sealed class GameDataDiffBuilderTests
         Assert.Equal([1], diff.RemovedObjectIds);
         Assert.NotNull(diff.PlayerStats);
         Assert.Null(diff.FameBonuses);
+        Assert.Equal("to", diff.ToBuildId);
+        Assert.Equal("stats-new", diff.PlayerStatsHash);
+        Assert.Equal("fame-same", diff.FameBonusesHash);
     }
 
     private static GameDataManifest Manifest(
