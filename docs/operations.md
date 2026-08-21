@@ -94,6 +94,37 @@ Monitor at minimum:
 The latest successful build remains available if the worker cannot download,
 extract, validate, or publish a newer build.
 
+## Data protection
+
+The service holds no account data. Requests carry no identifiers, and the only
+write path a caller can reach is an update hint, which is a 32-character build
+hash.
+
+What needs care is the request log rather than the database. A sprite request's
+path is the content hash of an item the client is rendering, and clients fetch
+sprites only for what they display. Recorded next to a client address, that
+becomes a per-address record of a user's inventory that accumulates over time.
+It is also unavoidable for the user: without the sprites, items cannot be shown
+at all, so there is nothing to opt out of.
+
+The gateway therefore sets `access_log off`. Error entries can still include a
+client address, so container output is capped at three ten-megabyte files per
+service, which bounds how long anything is retained. The application itself logs
+build and refresh activity only, never a caller address; `Microsoft.AspNetCore`
+is pinned to `Warning` so no per-request entries are produced.
+
+Client addresses are still used in memory to partition rate limits. That is
+transient and never written anywhere.
+
+> **The cluster does not use this gateway.** Production traffic reaches the
+> service through the existing EAM ingress, so the `access_log off` setting here
+> applies only to the Compose stack. Whatever fronts the service in the cluster
+> needs the same treatment, or the log simply moves up a layer. Verify the
+> ingress before treating this as done.
+
+If a request log is ever needed for troubleshooting, `deploy/nginx.conf` carries
+a commented format that records neither the client nor the requested item.
+
 ## Rollback
 
 Application releases are stateless apart from PostgreSQL and the worker cache.

@@ -13,12 +13,22 @@ name: rotmg-game-data-service
 # Cluster deployments receive DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD instead
 # of ConnectionStrings__GameData. See docs/operations.md.
 
+# Container output is capped so nothing accumulates indefinitely. Error
+# entries can carry a client address, so retention is bounded rather than left
+# to the daemon default of unlimited.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app-environment: &app-environment
   ConnectionStrings__GameData: Host=postgres;Port=5432;Database=rotmg_game_data;Username=rotmg_service;Password=${POSTGRES_PASSWORD};Pooling=true;Maximum Pool Size=5;Timeout=10;Command Timeout=30
   Proxy__TrustForwardedHeaders: "true"
   DOTNET_EnableDiagnostics: "0"
 
 x-api: &api
+  logging: *logging
   build:
     context: .
   image: rotmg-game-data-service:local
@@ -47,6 +57,7 @@ x-api: &api
 
 services:
   postgres:
+    logging: *logging
     build:
       context: .
       dockerfile: deploy/Dockerfile.postgres
@@ -74,6 +85,7 @@ services:
       start_period: 20s
 
   backup:
+    logging: *logging
     image: rotmg-game-data-postgres:local
     user: "70:70"
     entrypoint: ["/bin/sh", "-ec"]
@@ -120,6 +132,7 @@ services:
     <<: *api
 
   worker:
+    logging: *logging
     build:
       context: .
     image: rotmg-game-data-service:local
@@ -143,6 +156,7 @@ services:
       - outbound
 
   gateway:
+    logging: *logging
     build:
       context: .
       dockerfile: deploy/Dockerfile.gateway
