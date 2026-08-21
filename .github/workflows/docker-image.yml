@@ -26,6 +26,25 @@ jobs:
         fi
         echo "Building version $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        # Installs whatever global.json pins, so the SDK cannot drift from it.
+        global-json-file: global.json
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    - name: Restore test dependencies
+      # TargetFramework is pinned the same way the Dockerfile pins it: the
+      # extractor also targets net8.0-windows, which cannot be restored or built
+      # on this runner.
+      run: dotnet restore tests/RotMGGameDataService.Tests/RotMGGameDataService.Tests.csproj /p:TargetFramework=net8.0
+    - name: Run tests
+      run: dotnet test tests/RotMGGameDataService.Tests/RotMGGameDataService.Tests.csproj --configuration Release --framework net8.0 --no-restore --verbosity minimal
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     - name: Login to Harbor Container Registry
@@ -40,7 +59,7 @@ jobs:
         context: .
         file: ./Dockerfile
         push: true
-        tags: harbor.devopskit.de/eam/eam_game_data_api:${{ env.VERSION }}
+        tags: harbor.devopskit.de/eam/eam_game_assets_api:${{ env.VERSION }}
         # A .NET restore and publish is far heavier than an npm install, so the
         # layer cache is worth keeping between runs.
         cache-from: type=gha
