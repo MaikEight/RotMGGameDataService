@@ -8,3 +8,6 @@ artifacts/
 .data/
 *.user
 *.suo
+
+# Local run profiles hold development database credentials.
+**/Properties/launchSettings.json
