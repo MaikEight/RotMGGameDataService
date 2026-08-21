@@ -32,6 +32,8 @@ public static class GameDataDiffBuilder
             to.GeneratedAt,
             to.PlayerStatsHash,
             to.FameBonusesHash,
+            to.Objects.Count,
+            GameDataJson.HashObjectCatalog(to.Objects),
             added,
             modified,
             removed,

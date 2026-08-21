@@ -37,6 +37,36 @@ public sealed class GameDataDiffBuilderTests
         Assert.Equal("to", diff.ToBuildId);
         Assert.Equal("stats-new", diff.PlayerStatsHash);
         Assert.Equal("fame-same", diff.FameBonusesHash);
+        Assert.Equal(2, diff.ObjectCount);
+        Assert.Equal(GameDataJson.HashObjectCatalog(to.Objects), diff.ObjectsCatalogHash);
+    }
+
+    [Fact]
+    public void HashObjectCatalog_OrdersByOrdinalKeyAndIgnoresInsertionOrder()
+    {
+        // A consumer reproduces this hash in another language from the object
+        // ids and metadata hashes alone, so the ordering has to be ordinal and
+        // independent of how the map was built.
+        var ascending = new Dictionary<string, GameObjectRecord>
+        {
+            ["10"] = Object(10, "hash-10"),
+            ["9"] = Object(9, "hash-9"),
+        };
+        var descending = new Dictionary<string, GameObjectRecord>
+        {
+            ["9"] = Object(9, "hash-9"),
+            ["10"] = Object(10, "hash-10"),
+        };
+
+        Assert.Equal(
+            GameDataJson.HashObjectCatalog(ascending),
+            GameDataJson.HashObjectCatalog(descending));
+
+        // "10" sorts before "9" under ordinal comparison, which is what the
+        // consumer's byte-wise sort produces.
+        var expected = GameDataJson.HashBytes(
+            System.Text.Encoding.UTF8.GetBytes("10:hash-10\n9:hash-9"));
+        Assert.Equal(expected, GameDataJson.HashObjectCatalog(ascending));
     }
 
     private static GameDataManifest Manifest(

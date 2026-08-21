@@ -173,6 +173,8 @@ GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
   "generatedAt": "2026-08-19T10:00:00Z",
   "playerStatsHash": "section-sha256",
   "fameBonusesHash": "section-sha256",
+  "objectCount": 14655,
+  "objectsCatalogHash": "objects-catalog-sha256",
   "addedObjects": {},
   "modifiedObjects": {},
   "removedObjectIds": [],
@@ -180,6 +182,20 @@ GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
   "fameBonuses": null
 }
 ```
+
+`objectCount` and `objectsCatalogHash` describe the target manifest's object map
+so a client can verify what it assembled. A downloaded manifest is checked
+against `manifestSha256`, but an assembled one cannot be, because reproducing
+the canonical serialized bytes is not something another language can be relied
+on to do. The catalog hash avoids that: it is the SHA-256 of
+
+```text
+<objectId>:<metadataHash>
+```
+
+lines for every object, joined with `\n`, with the ids ordered by ordinal
+comparison — so `"10"` precedes `"9"`. A client that applies a diff and gets a
+different catalog should discard the result and fetch the full manifest.
 
 Added and modified entries contain complete `GameObjectRecord` values.
 `playerStats` and `fameBonuses` are null when unchanged and complete replacement

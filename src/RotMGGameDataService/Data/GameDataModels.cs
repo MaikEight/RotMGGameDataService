@@ -80,6 +80,11 @@ public sealed record GameDataDiff(
     DateTimeOffset GeneratedAt,
     string PlayerStatsHash,
     string FameBonusesHash,
+    // The target's object count and catalog hash let a consumer verify the
+    // manifest it assembles from this diff. It cannot use the manifest hash for
+    // that, because it never sees the canonical serialized bytes.
+    int ObjectCount,
+    string ObjectsCatalogHash,
     IReadOnlyDictionary<string, GameObjectRecord> AddedObjects,
     IReadOnlyDictionary<string, GameObjectRecord> ModifiedObjects,
     IReadOnlyList<int> RemovedObjectIds,
