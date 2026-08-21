@@ -30,12 +30,32 @@ if (mode is not ("serve" or "worker" or "refresh"))
 }
 
 var builder = WebApplication.CreateBuilder(hostArgs);
+
+// The other EAM APIs are configured with PORT, so the same variable is honoured
+// here and wins when set. It cannot defer to ASPNETCORE_HTTP_PORTS, because the
+// runtime image already defines that, which would leave PORT permanently inert.
+var listenPort = builder.Configuration["PORT"];
+if (!string.IsNullOrWhiteSpace(listenPort))
+{
+    if (!int.TryParse(listenPort, out var listenPortNumber)
+        || listenPortNumber is < 1 or > 65535)
+    {
+        Console.Error.WriteLine($"PORT must be a number between 1 and 65535, but was '{listenPort}'.");
+        return 2;
+    }
+
+    builder.WebHost.UseUrls($"http://+:{listenPortNumber}");
+}
+
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.AddServerHeader = false;
     options.Limits.MaxRequestBodySize = 16 * 1024;
     options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
 });
+
+if (DatabaseConnection.IsSqlLoggingEnabled(builder.Configuration))
+    builder.Logging.AddFilter("Npgsql", LogLevel.Information);
 
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -83,10 +103,7 @@ builder.Services.AddHttpClient<RealmBuildClient>(client =>
 builder.Services.AddSingleton(serviceProvider =>
 {
     var configuration = serviceProvider.GetRequiredService<IConfiguration>();
-    var connectionString = configuration.GetConnectionString("GameData");
-    if (string.IsNullOrWhiteSpace(connectionString))
-        throw new InvalidOperationException("ConnectionStrings:GameData must be configured.");
-    return new NpgsqlDataSourceBuilder(connectionString).Build();
+    return new NpgsqlDataSourceBuilder(DatabaseConnection.Resolve(configuration)).Build();
 });
 builder.Services.AddSingleton<DatabaseInitializer>();
 builder.Services.AddSingleton<GameDataStore>();

@@ -14,16 +14,21 @@ RUN dotnet publish src/RotMGGameDataService/RotMGGameDataService.csproj \
     --output /app/publish \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+# The work directory has to be staged here: the chiseled runtime image ships no
+# shell, so RUN is unavailable in the final stage.
+RUN mkdir -p /staging/data
+
+# Chiseled: no shell, no package manager, and it already runs as UID 1654 with
+# DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true, which matches the project's
+# InvariantGlobalization setting.
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-jammy-chiseled AS runtime
 WORKDIR /app
 
-RUN mkdir /data && chown app:app /data
+COPY --from=build --chown=1654:1654 /staging/data /data
 COPY --from=build /app/publish/ ./
 
-ENV ASPNETCORE_HTTP_PORTS=8080 \
-    Realm__WorkDirectory=/data
+ENV Realm__WorkDirectory=/data
 EXPOSE 8080
 
-USER app
-ENTRYPOINT ["dotnet", "RotMGGameDataService.dll"]
+ENTRYPOINT ["/usr/bin/dotnet", "RotMGGameDataService.dll"]
 CMD ["serve"]

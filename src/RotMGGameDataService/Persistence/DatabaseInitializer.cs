@@ -7,6 +7,7 @@ public sealed class DatabaseInitializer(
     NpgsqlDataSource dataSource,
     ILogger<DatabaseInitializer> logger)
 {
+    private const long SchemaCreationLockId = 0x524F544D47444444;
     private const long PayloadHashRepairLockId = 0x524F544D47444853;
 
     private const string SchemaSql = """
@@ -27,7 +28,7 @@ public sealed class DatabaseInitializer(
         CREATE INDEX IF NOT EXISTS game_data_builds_realm_hash
             ON game_data_builds (realm_build_hash, generated_at DESC);
 
-        CREATE TABLE IF NOT EXISTS sprites (
+        CREATE TABLE IF NOT EXISTS game_data_sprites (
             sprite_hash char(64) PRIMARY KEY,
             png_bytes bytea NOT NULL,
             width integer NOT NULL,
@@ -35,13 +36,13 @@ public sealed class DatabaseInitializer(
             created_at timestamptz NOT NULL DEFAULT now()
         );
 
-        CREATE TABLE IF NOT EXISTS build_sprites (
+        CREATE TABLE IF NOT EXISTS game_data_build_sprites (
             build_id char(64) NOT NULL REFERENCES game_data_builds(build_id) ON DELETE CASCADE,
-            sprite_hash char(64) NOT NULL REFERENCES sprites(sprite_hash),
+            sprite_hash char(64) NOT NULL REFERENCES game_data_sprites(sprite_hash),
             PRIMARY KEY (build_id, sprite_hash)
         );
 
-        CREATE TABLE IF NOT EXISTS build_diffs (
+        CREATE TABLE IF NOT EXISTS game_data_build_diffs (
             from_build_id char(64) NOT NULL REFERENCES game_data_builds(build_id) ON DELETE CASCADE,
             to_build_id char(64) NOT NULL REFERENCES game_data_builds(build_id) ON DELETE CASCADE,
             diff_json bytea NOT NULL,
@@ -49,7 +50,7 @@ public sealed class DatabaseInitializer(
             PRIMARY KEY (from_build_id, to_build_id)
         );
 
-        CREATE TABLE IF NOT EXISTS update_hints (
+        CREATE TABLE IF NOT EXISTS game_data_update_hints (
             observed_build_hash char(32) PRIMARY KEY,
             first_seen_at timestamptz NOT NULL,
             last_seen_at timestamptz NOT NULL,
@@ -57,7 +58,7 @@ public sealed class DatabaseInitializer(
             processed_at timestamptz NULL
         );
 
-        CREATE TABLE IF NOT EXISTS refresh_state (
+        CREATE TABLE IF NOT EXISTS game_data_refresh_state (
             id smallint PRIMARY KEY CHECK (id = 1),
             last_checked_at timestamptz NULL,
             last_successful_at timestamptz NULL,
@@ -67,7 +68,7 @@ public sealed class DatabaseInitializer(
             last_error text NULL
         );
 
-        INSERT INTO refresh_state (id) VALUES (1)
+        INSERT INTO game_data_refresh_state (id) VALUES (1)
         ON CONFLICT (id) DO NOTHING;
         """;
 
@@ -78,8 +79,7 @@ public sealed class DatabaseInitializer(
         {
             try
             {
-                await using var command = dataSource.CreateCommand(SchemaSql);
-                await command.ExecuteNonQueryAsync(cancellationToken);
+                await CreateSchemaAsync(cancellationToken);
                 await RepairStoredPayloadHashesAsync(cancellationToken);
                 logger.LogInformation("PostgreSQL schema is ready");
                 return;
@@ -96,6 +96,39 @@ public sealed class DatabaseInitializer(
                 await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             }
         }
+    }
+
+    /// <summary>
+    /// Creates the service's own tables if they are absent.
+    /// </summary>
+    /// <remarks>
+    /// The statements only ever add objects, so they never affect tables owned
+    /// by the other EAM APIs sharing this database. A transaction-scoped
+    /// advisory lock serialises the DDL because <c>CREATE TABLE IF NOT
+    /// EXISTS</c> is not atomic against a concurrent <c>CREATE</c>: without it,
+    /// replicas starting at the same time can fail on the
+    /// <c>pg_type_typname_nsp_index</c> unique constraint.
+    /// </remarks>
+    private async Task CreateSchemaAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var lockCommand = new NpgsqlCommand(
+                         "SELECT pg_advisory_xact_lock($1)",
+                         connection,
+                         transaction))
+        {
+            lockCommand.Parameters.AddWithValue(SchemaCreationLockId);
+            await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var schemaCommand = new NpgsqlCommand(SchemaSql, connection, transaction))
+        {
+            await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task RepairStoredPayloadHashesAsync(CancellationToken cancellationToken)
@@ -173,7 +206,7 @@ public sealed class DatabaseInitializer(
     {
         var repairs = new List<(string FromBuildId, string ToBuildId, string Hash)>();
         await using (var selectCommand = new NpgsqlCommand(
-                         "SELECT from_build_id, to_build_id, diff_json, diff_hash FROM build_diffs",
+                         "SELECT from_build_id, to_build_id, diff_json, diff_hash FROM game_data_build_diffs",
                          connection,
                          transaction))
         await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken))
@@ -195,7 +228,7 @@ public sealed class DatabaseInitializer(
         foreach (var repair in repairs)
         {
             await using var updateCommand = new NpgsqlCommand("""
-                UPDATE build_diffs SET diff_hash = $1
+                UPDATE game_data_build_diffs SET diff_hash = $1
                 WHERE from_build_id = $2 AND to_build_id = $3
                 """, connection, transaction);
             updateCommand.Parameters.AddWithValue(repair.Hash);

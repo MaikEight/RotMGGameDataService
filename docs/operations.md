@@ -2,14 +2,17 @@
 
 ## Deployment boundary
 
-The Compose deployment is suitable for a single Docker host and mirrors the
-intended multi-instance topology: two stateless API replicas, one updater,
+The Compose deployment is for development and single-host use. It mirrors the
+intended multi-instance topology with two stateless API replicas, one updater,
 PostgreSQL, a gateway, and a backup process. The gateway defaults to loopback.
 Use a private address for LAN access or place it behind a TLS reverse proxy for
 public access.
 
 PostgreSQL must not be published. The updater is the only application service
 that needs outbound Realm access.
+
+Cluster deployments use the shared EAM PostgreSQL instance and the existing
+ingress instead; see [Kubernetes mapping](#kubernetes-mapping).
 
 ## Host preparation
 
@@ -101,14 +104,58 @@ an explicit database incompatibility has been identified.
 
 ## Kubernetes mapping
 
-For Kubernetes, run the same application image as:
+The Compose stack in this repository is for development and single-host use. In
+the EAM cluster only the application image is deployed:
 
 - an API Deployment with at least two `serve` replicas;
 - one `worker` replica (the advisory lock still prevents overlap);
-- a managed or clustered PostgreSQL service;
-- a CronJob or managed backup facility;
-- an ingress/CDN providing TLS and cluster-wide rate limiting.
+- the shared PostgreSQL instance used by the other EAM APIs;
+- the existing ingress, which provides TLS and cluster-wide rate limiting.
 
-Keep API pods stateless. Provide the worker with ephemeral scratch space and
-configure all secrets through Kubernetes Secrets rather than environment files
-stored in the image.
+The `postgres`, `gateway` and `backup` services from `compose.yaml` are **not**
+deployed. The backup process in particular runs `pg_dump` against the whole
+database: against the shared instance it would capture every other service's
+tables, so central cluster backups are used instead.
+
+Keep API pods stateless and give the worker ephemeral scratch space at the path
+in `Realm__WorkDirectory`. The runtime image is chiseled and already runs as UID
+1654, so mounted volumes must be writable by that UID.
+
+### Database configuration
+
+In the cluster the service reads the same variables as the other EAM APIs,
+injected from Kubernetes Secrets:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_HOST` | PostgreSQL host. |
+| `DATABASE_PORT` | PostgreSQL port; defaults to 5432 when unset. |
+| `DATABASE_NAME` | Database name. |
+| `DATABASE_USERNAME` | Role name. |
+| `DATABASE_PASSWORD` | Role password. |
+| `DATABASE_LOGGING` | `true` raises Npgsql logging to Information. |
+| `DEBUG_MODE` | When set, disables TLS to the database for local use. |
+| `PORT` | Listen port. Takes precedence over `ASPNETCORE_HTTP_PORTS`. |
+
+Transport encryption to the database is required unless `DEBUG_MODE` is set, and
+the server certificate is not verified, matching `eam-api-commons`. Setting
+`ConnectionStrings__GameData` overrides all of the above and is how the Compose
+stack configures its own PostgreSQL container.
+
+Each replica keeps a deliberately small connection pool because the instance is
+shared with every other EAM API.
+
+### Shared-database safety
+
+All of this service's tables are prefixed `game_data_`:
+
+```text
+game_data_builds        game_data_sprites       game_data_build_sprites
+game_data_build_diffs   game_data_update_hints  game_data_refresh_state
+```
+
+Schema creation only ever adds objects, never drops or alters them, so it cannot
+affect tables owned by another service. The statements run under a
+transaction-scoped advisory lock so simultaneous pod starts cannot collide on
+concurrent DDL. The names are also registered in `eam-api-commons` as reserved,
+which makes a colliding Sequelize model fail fast during development.

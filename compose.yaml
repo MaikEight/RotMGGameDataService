@@ -1,7 +1,20 @@
 name: rotmg-game-data-service
 
+# DEVELOPMENT AND SINGLE-HOST USE ONLY.
+#
+# This stack runs its own PostgreSQL, gateway and backup process. In the EAM
+# Kubernetes cluster the database is shared with the other EAM APIs, TLS and
+# rate limiting come from the existing ingress, and backups are handled
+# centrally: only the `api` and `worker` containers are deployed there, and the
+# `postgres`, `gateway` and `backup` services below must NOT be. In particular
+# the backup service would pg_dump the entire shared database, capturing every
+# other service's tables.
+#
+# Cluster deployments receive DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD instead
+# of ConnectionStrings__GameData. See docs/operations.md.
+
 x-app-environment: &app-environment
-  ConnectionStrings__GameData: Host=postgres;Port=5432;Database=rotmg_game_data;Username=rotmg_service;Password=${POSTGRES_PASSWORD};Pooling=true;Maximum Pool Size=20;Timeout=10;Command Timeout=30
+  ConnectionStrings__GameData: Host=postgres;Port=5432;Database=rotmg_game_data;Username=rotmg_service;Password=${POSTGRES_PASSWORD};Pooling=true;Maximum Pool Size=5;Timeout=10;Command Timeout=30
   Proxy__TrustForwardedHeaders: "true"
   DOTNET_EnableDiagnostics: "0"
 
@@ -26,7 +39,7 @@ x-api: &api
     - frontend
     - backend
   healthcheck:
-    test: ["CMD", "dotnet", "RotMGGameDataService.dll", "healthcheck", "http://127.0.0.1:8080/health/ready"]
+    test: ["CMD", "/usr/bin/dotnet", "RotMGGameDataService.dll", "healthcheck", "http://127.0.0.1:8080/health/ready"]
     interval: 15s
     timeout: 6s
     retries: 5

@@ -121,7 +121,7 @@ public sealed class GameDataStore(
                 ORDER BY is_latest DESC, generated_at DESC LIMIT 1
             )
             SELECT diff_json, diff_hash
-            FROM build_diffs
+            FROM game_data_build_diffs
             WHERE from_build_id = (SELECT build_id FROM from_build)
               AND to_build_id = (SELECT build_id FROM to_build)
             """;
@@ -139,7 +139,7 @@ public sealed class GameDataStore(
         CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(
-            "SELECT png_bytes FROM sprites WHERE sprite_hash = $1");
+            "SELECT png_bytes FROM game_data_sprites WHERE sprite_hash = $1");
         command.Parameters.AddWithValue(hash);
         return await command.ExecuteScalarAsync(cancellationToken) as byte[];
     }
@@ -246,7 +246,7 @@ public sealed class GameDataStore(
 
         var alreadyPending = false;
         await using (var pendingCommand = new NpgsqlCommand(
-                         "SELECT processed_at IS NULL FROM update_hints WHERE observed_build_hash = $1",
+                         "SELECT processed_at IS NULL FROM game_data_update_hints WHERE observed_build_hash = $1",
                          connection,
                          transaction))
         {
@@ -257,12 +257,12 @@ public sealed class GameDataStore(
 
         var now = DateTime.UtcNow;
         await using (var hintCommand = new NpgsqlCommand("""
-            INSERT INTO update_hints (
+            INSERT INTO game_data_update_hints (
                 observed_build_hash, first_seen_at, last_seen_at, report_count, processed_at)
             VALUES ($1, $2, $2, 1, NULL)
             ON CONFLICT (observed_build_hash) DO UPDATE SET
                 last_seen_at = EXCLUDED.last_seen_at,
-                report_count = update_hints.report_count + 1,
+                report_count = game_data_update_hints.report_count + 1,
                 processed_at = NULL
             """, connection, transaction))
         {
@@ -272,7 +272,7 @@ public sealed class GameDataStore(
         }
 
         await using (var pendingStateCommand = new NpgsqlCommand("""
-            UPDATE refresh_state
+            UPDATE game_data_refresh_state
             SET pending_hint_at = COALESCE(pending_hint_at, $1)
             WHERE id = 1
             """, connection, transaction))
@@ -283,7 +283,7 @@ public sealed class GameDataStore(
 
         DateTime? lastOfficialCheck;
         await using (var stateCommand = new NpgsqlCommand(
-                         "SELECT last_official_check_at FROM refresh_state WHERE id = 1",
+                         "SELECT last_official_check_at FROM game_data_refresh_state WHERE id = 1",
                          connection,
                          transaction))
         {
@@ -304,7 +304,7 @@ public sealed class GameDataStore(
         await using var command = dataSource.CreateCommand("""
             SELECT last_checked_at, last_successful_at, last_official_check_at,
                    pending_hint_at, last_error_at, last_error
-            FROM refresh_state WHERE id = 1
+            FROM game_data_refresh_state WHERE id = 1
             """);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
@@ -322,7 +322,7 @@ public sealed class GameDataStore(
     public async Task MarkOfficialCheckStartedAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
-            UPDATE refresh_state
+            UPDATE game_data_refresh_state
             SET last_checked_at = now(), last_official_check_at = now()
             WHERE id = 1
             """);
@@ -334,7 +334,7 @@ public sealed class GameDataStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var stateCommand = new NpgsqlCommand("""
-            UPDATE refresh_state
+            UPDATE game_data_refresh_state
             SET last_successful_at = now(), pending_hint_at = NULL,
                 last_error_at = NULL, last_error = NULL
             WHERE id = 1
@@ -344,7 +344,7 @@ public sealed class GameDataStore(
         }
 
         await using (var processHintsCommand = new NpgsqlCommand(
-                         "UPDATE update_hints SET processed_at = now() WHERE processed_at IS NULL",
+                         "UPDATE game_data_update_hints SET processed_at = now() WHERE processed_at IS NULL",
                          connection,
                          transaction))
         {
@@ -352,7 +352,7 @@ public sealed class GameDataStore(
         }
 
         await using (var cleanupHintsCommand = new NpgsqlCommand(
-                         "DELETE FROM update_hints WHERE processed_at < now() - interval '7 days'",
+                         "DELETE FROM game_data_update_hints WHERE processed_at < now() - interval '7 days'",
                          connection,
                          transaction))
         {
@@ -371,7 +371,7 @@ public sealed class GameDataStore(
             message = message[..2_048];
 
         await using var command = dataSource.CreateCommand("""
-            UPDATE refresh_state
+            UPDATE game_data_refresh_state
             SET last_error_at = now(), last_error = $1
             WHERE id = 1
             """);
@@ -431,7 +431,7 @@ public sealed class GameDataStore(
         var hashes = sprites.Keys.ToArray();
         var bytes = hashes.Select(hash => sprites[hash]).ToArray();
         await using var command = new NpgsqlCommand("""
-            INSERT INTO sprites (sprite_hash, png_bytes, width, height)
+            INSERT INTO game_data_sprites (sprite_hash, png_bytes, width, height)
             SELECT value_hash, value_bytes, 40, 40
             FROM unnest($1::text[], $2::bytea[]) AS value(value_hash, value_bytes)
             ON CONFLICT (sprite_hash) DO NOTHING
@@ -473,7 +473,7 @@ public sealed class GameDataStore(
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO build_sprites (build_id, sprite_hash)
+            INSERT INTO game_data_build_sprites (build_id, sprite_hash)
             SELECT $1, value_hash FROM unnest($2::text[]) AS value(value_hash)
             """, connection, transaction);
         command.Parameters.AddWithValue(buildId);
@@ -489,7 +489,7 @@ public sealed class GameDataStore(
     {
         var bytes = GameDataJson.Serialize(diff);
         await using var command = new NpgsqlCommand("""
-            INSERT INTO build_diffs (
+            INSERT INTO game_data_build_diffs (
                 from_build_id, to_build_id, diff_json, diff_hash)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (from_build_id, to_build_id) DO NOTHING

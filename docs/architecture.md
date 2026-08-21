@@ -150,22 +150,27 @@ game_data_builds
   build_id, realm_build_hash, source_checksum, schema_version,
   generated_at, manifest_json, manifest_hash, is_latest
 
-sprites
+game_data_sprites
   sprite_hash, png_bytes, width, height, created_at
 
-build_sprites
+game_data_build_sprites
   build_id, sprite_hash
 
-build_diffs
+game_data_build_diffs
   from_build_id, to_build_id, diff_json, diff_hash
 
-update_hints
+game_data_update_hints
   observed_build_hash, first_seen_at, last_seen_at, report_count
 
-refresh_state
+game_data_refresh_state
   last_checked_at, last_successful_at, last_official_check_at,
   pending_hint_at, last_error_at, last_error
 ```
+
+Every table carries the `game_data_` prefix because the deployed instance shares
+one PostgreSQL database with the other EAM APIs. The names are registered as
+reserved in `eam-api-commons` so a colliding Sequelize model in another service
+fails at startup rather than competing for the table.
 
 The schema is created idempotently at process startup. Manifest and diff JSON
 are stored as deterministic UTF-8 bytes. Sprite rows are content-addressed and
