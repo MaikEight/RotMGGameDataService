@@ -1,5 +1,4 @@
 using Npgsql;
-using RotMGGameDataService.Data;
 
 namespace RotMGGameDataService.Persistence;
 
@@ -8,7 +7,6 @@ public sealed class DatabaseInitializer(
     ILogger<DatabaseInitializer> logger)
 {
     private const long SchemaCreationLockId = 0x524F544D47444444;
-    private const long PayloadHashRepairLockId = 0x524F544D47444853;
 
     private const string SchemaSql = """
         CREATE TABLE IF NOT EXISTS game_data_builds (
@@ -70,6 +68,11 @@ public sealed class DatabaseInitializer(
 
         INSERT INTO game_data_refresh_state (id) VALUES (1)
         ON CONFLICT (id) DO NOTHING;
+
+        CREATE TABLE IF NOT EXISTS game_data_migrations (
+            name text PRIMARY KEY,
+            applied_at timestamptz NOT NULL DEFAULT now()
+        );
         """;
 
     public async Task EnsureCreatedAsync(CancellationToken cancellationToken)
@@ -80,7 +83,6 @@ public sealed class DatabaseInitializer(
             try
             {
                 await CreateSchemaAsync(cancellationToken);
-                await RepairStoredPayloadHashesAsync(cancellationToken);
                 logger.LogInformation("PostgreSQL schema is ready");
                 return;
             }
@@ -128,33 +130,69 @@ public sealed class DatabaseInitializer(
             await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await ApplyPayloadHashRepairAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private async Task RepairStoredPayloadHashesAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Rewrites payload hashes that were computed over the JSON encoding of the
+    /// stored bytes rather than over the bytes themselves.
+    /// </summary>
+    /// <remarks>
+    /// Databases written before the hashing fix carry values a consumer cannot
+    /// verify, because it hashes the bytes it received. This runs once per
+    /// database, recorded in <c>game_data_migrations</c>, rather than on every
+    /// start: it used to read every manifest and diff blob into the process on
+    /// each launch, which is a full scan of the largest tables repeated by every
+    /// replica. PostgreSQL computes the hashes here, so no payload is
+    /// transferred at all. Requires PostgreSQL 11 or newer for <c>sha256()</c>.
+    /// </remarks>
+    private async Task ApplyPayloadHashRepairAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        const string migrationName = "payload-hash-repair";
 
-        await using (var lockCommand = new NpgsqlCommand(
-                         "SELECT pg_advisory_xact_lock($1)",
+        await using (var appliedCommand = new NpgsqlCommand(
+                         "SELECT 1 FROM game_data_migrations WHERE name = $1",
                          connection,
                          transaction))
         {
-            lockCommand.Parameters.AddWithValue(PayloadHashRepairLockId);
-            await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+            appliedCommand.Parameters.AddWithValue(migrationName);
+            if (await appliedCommand.ExecuteScalarAsync(cancellationToken) is not null)
+                return;
         }
 
-        var repairedManifests = await RepairManifestHashesAsync(
-            connection,
-            transaction,
-            cancellationToken);
-        var repairedDiffs = await RepairDiffHashesAsync(
-            connection,
-            transaction,
-            cancellationToken);
+        int repairedManifests;
+        await using (var manifestCommand = new NpgsqlCommand("""
+            UPDATE game_data_builds
+            SET manifest_hash = encode(sha256(manifest_json), 'hex')
+            WHERE manifest_hash IS DISTINCT FROM encode(sha256(manifest_json), 'hex')
+            """, connection, transaction))
+        {
+            repairedManifests = await manifestCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
 
-        await transaction.CommitAsync(cancellationToken);
+        int repairedDiffs;
+        await using (var diffCommand = new NpgsqlCommand("""
+            UPDATE game_data_build_diffs
+            SET diff_hash = encode(sha256(diff_json), 'hex')
+            WHERE diff_hash IS DISTINCT FROM encode(sha256(diff_json), 'hex')
+            """, connection, transaction))
+        {
+            repairedDiffs = await diffCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var recordCommand = new NpgsqlCommand(
+                         "INSERT INTO game_data_migrations (name) VALUES ($1)",
+                         connection,
+                         transaction))
+        {
+            recordCommand.Parameters.AddWithValue(migrationName);
+            await recordCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         if (repairedManifests > 0 || repairedDiffs > 0)
         {
             logger.LogInformation(
@@ -162,81 +200,5 @@ public sealed class DatabaseInitializer(
                 repairedManifests,
                 repairedDiffs);
         }
-    }
-
-    private static async Task<int> RepairManifestHashesAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        var repairs = new List<(string BuildId, string Hash)>();
-        await using (var selectCommand = new NpgsqlCommand(
-                         "SELECT build_id, manifest_json, manifest_hash FROM game_data_builds",
-                         connection,
-                         transaction))
-        await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var bytes = reader.GetFieldValue<byte[]>(1);
-                var hash = GameDataJson.HashBytes(bytes);
-                if (!string.Equals(hash, reader.GetString(2).Trim(), StringComparison.Ordinal))
-                    repairs.Add((reader.GetString(0).Trim(), hash));
-            }
-        }
-
-        foreach (var repair in repairs)
-        {
-            await using var updateCommand = new NpgsqlCommand(
-                "UPDATE game_data_builds SET manifest_hash = $1 WHERE build_id = $2",
-                connection,
-                transaction);
-            updateCommand.Parameters.AddWithValue(repair.Hash);
-            updateCommand.Parameters.AddWithValue(repair.BuildId);
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        return repairs.Count;
-    }
-
-    private static async Task<int> RepairDiffHashesAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        var repairs = new List<(string FromBuildId, string ToBuildId, string Hash)>();
-        await using (var selectCommand = new NpgsqlCommand(
-                         "SELECT from_build_id, to_build_id, diff_json, diff_hash FROM game_data_build_diffs",
-                         connection,
-                         transaction))
-        await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var bytes = reader.GetFieldValue<byte[]>(2);
-                var hash = GameDataJson.HashBytes(bytes);
-                if (!string.Equals(hash, reader.GetString(3).Trim(), StringComparison.Ordinal))
-                {
-                    repairs.Add((
-                        reader.GetString(0).Trim(),
-                        reader.GetString(1).Trim(),
-                        hash));
-                }
-            }
-        }
-
-        foreach (var repair in repairs)
-        {
-            await using var updateCommand = new NpgsqlCommand("""
-                UPDATE game_data_build_diffs SET diff_hash = $1
-                WHERE from_build_id = $2 AND to_build_id = $3
-                """, connection, transaction);
-            updateCommand.Parameters.AddWithValue(repair.Hash);
-            updateCommand.Parameters.AddWithValue(repair.FromBuildId);
-            updateCommand.Parameters.AddWithValue(repair.ToBuildId);
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        return repairs.Count;
     }
 }

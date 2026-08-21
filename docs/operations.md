@@ -183,10 +183,16 @@ All of this service's tables are prefixed `game_data_`:
 ```text
 game_data_builds        game_data_sprites       game_data_build_sprites
 game_data_build_diffs   game_data_update_hints  game_data_refresh_state
+game_data_migrations
 ```
 
 Schema creation only ever adds objects, never drops or alters them, so it cannot
 affect tables owned by another service. The statements run under a
 transaction-scoped advisory lock so simultaneous pod starts cannot collide on
-concurrent DDL. The names are also registered in `eam-api-commons` as reserved,
+concurrent DDL.
+
+One-shot data corrections run in that same transaction and are recorded in
+`game_data_migrations`, so they execute once per database rather than on every
+start. They are written as SQL, so PostgreSQL computes over the payload columns
+without transferring them; this needs PostgreSQL 11 or newer for `sha256()`. The names are also registered in `eam-api-commons` as reserved,
 which makes a colliding Sequelize model fail fast during development.

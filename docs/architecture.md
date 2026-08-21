@@ -174,7 +174,14 @@ game_data_update_hints
 game_data_refresh_state
   last_checked_at, last_successful_at, last_official_check_at,
   pending_hint_at, last_error_at, last_error
+
+game_data_migrations
+  name, applied_at
 ```
+
+`game_data_migrations` records one-shot data fixes so they do not repeat. Schema
+creation itself stays idempotent and needs no ledger; the ledger exists for
+corrections that would otherwise re-scan the largest tables on every start.
 
 Every table carries the `game_data_` prefix because the deployed instance shares
 one PostgreSQL database with the other EAM APIs. The names are registered as
