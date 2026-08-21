@@ -96,6 +96,13 @@ public sealed record PublishedBuild(
 
 public sealed record StoredPayload(byte[] Bytes, string Hash);
 
+/// <summary>
+/// A resolved sprite-bundle request. <paramref name="FromBuildId"/> is null for
+/// a complete bundle and set when only the sprites added since that build are
+/// wanted.
+/// </summary>
+public sealed record SpriteBundle(string ToBuildId, string? FromBuildId, string ETag);
+
 public sealed record RefreshStatus(
     DateTimeOffset? LastCheckedAt,
     DateTimeOffset? LastSuccessfulAt,

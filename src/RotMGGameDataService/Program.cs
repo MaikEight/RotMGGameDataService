@@ -67,6 +67,10 @@ builder.Services.AddResponseCompression(options =>
     options.EnableForHttps = true;
     options.Providers.Add<BrotliCompressionProvider>();
     options.Providers.Add<GzipCompressionProvider>();
+    // Sprite bundles are tar archives of many small PNGs. The PNG payloads are
+    // already compressed, but tar pads every entry to a 512-byte boundary, and
+    // compressing the archive removes that padding from the wire.
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(["application/x-tar"]);
 });
 builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
     options.Level = CompressionLevel.Fastest);
@@ -212,6 +216,18 @@ static void ConfigureRateLimiting(RateLimiterOptions options)
         {
             TokenLimit = 600,
             TokensPerPeriod = 600,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+            AutoReplenishment = true,
+            QueueLimit = 0,
+        }));
+    // A consumer needs one bundle per build it has not seen, so a small budget
+    // is generous. Each response is far larger than a single sprite, which is
+    // the other reason to keep this tight.
+    options.AddPolicy(RateLimitPolicies.SpriteBundles, context =>
+        RateLimitPartition.GetTokenBucketLimiter(ClientKey(context), _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 12,
+            TokensPerPeriod = 12,
             ReplenishmentPeriod = TimeSpan.FromMinutes(1),
             AutoReplenishment = true,
             QueueLimit = 0,

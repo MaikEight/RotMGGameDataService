@@ -206,6 +206,42 @@ Cache-Control: public, max-age=31536000, immutable
 ETag: "<sprite-sha256>"
 ```
 
+## Get a sprite bundle
+
+```http
+GET /api/v1/builds/{toBuildIdentifier}/sprites
+GET /api/v1/builds/{toBuildIdentifier}/sprites?from={fromBuildIdentifier}
+```
+
+Returns every sprite for a build as a single uncompressed tar archive. With
+`from`, only the sprites that build added relative to the other one are
+included, which is the normal path for a consumer that already holds an earlier
+build.
+
+Each entry is named `<sprite-sha256>.png` and entries are ordered by hash, so a
+consumer verifies them exactly as it would a single sprite response. A consumer
+that already holds every sprite receives a valid empty archive, not an empty
+body.
+
+```http
+Content-Type: application/x-tar
+Cache-Control: public, max-age=31536000, immutable
+ETag: "<build-id>"
+```
+
+The bundle for a build, or for a pair of builds, never changes, so the entity
+tag is derived from the build identifiers rather than from the archive bytes and
+`If-None-Match` returns `304`.
+
+Requesting sprites individually is still supported and remains correct, but a
+cold consumer needs thousands of them at once and each contains only a few
+hundred bytes, so the per-request overhead dominates by an order of magnitude.
+Prefer the bundle for the initial population and the `from` form afterwards.
+
+Tar pads every entry to a 512-byte boundary, which roughly doubles the archive
+relative to its payload. The route participates in response compression, so a
+consumer sending `Accept-Encoding` receives close to the raw PNG size.
+
 ## Get updater status
 
 ```http
@@ -232,6 +268,7 @@ The built-in limits are per client and per API replica:
 
 - Metadata: 180 requests per minute.
 - Sprites: 600 requests per minute.
+- Sprite bundles: 12 requests per minute.
 - Update hints: 6 requests per minute.
 
 Rejected requests return `429 Too Many Requests` with `Retry-After: 60`.

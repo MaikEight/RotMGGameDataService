@@ -40,6 +40,8 @@ public static class ApiEndpoints
             .RequireRateLimiting(RateLimitPolicies.Metadata);
         api.MapGet("/sprites/{spriteHash}.png", GetSpriteAsync)
             .RequireRateLimiting(RateLimitPolicies.Sprites);
+        api.MapGet("/builds/{toBuildIdentifier}/sprites", GetSpriteBundleAsync)
+            .RequireRateLimiting(RateLimitPolicies.SpriteBundles);
         api.MapPost("/update-hints", SubmitUpdateHintAsync)
             .RequireRateLimiting(RateLimitPolicies.UpdateHints);
         api.MapGet("/status", GetStatusAsync)
@@ -130,6 +132,44 @@ public static class ApiEndpoints
 
         SetCacheHeaders(context, normalizedHash, ImmutableCacheControl);
         return Results.Bytes(png, "image/png");
+    }
+
+    /// <summary>
+    /// Streams every sprite for a build, or only those added since another
+    /// build, as a single tar archive.
+    /// </summary>
+    /// <remarks>
+    /// A cold consumer needs thousands of sprites at once, and requesting them
+    /// individually costs far more in per-request overhead than the roughly
+    /// 400 bytes each one contains. Entries are named by content hash, so a
+    /// consumer verifies them exactly as it would a single sprite response.
+    /// </remarks>
+    private static async Task<IResult> GetSpriteBundleAsync(
+        string toBuildIdentifier,
+        string? from,
+        HttpContext context,
+        GameDataStore store,
+        CancellationToken cancellationToken)
+    {
+        if (!IsBuildIdentifier(toBuildIdentifier))
+            return InvalidIdentifier("toBuildIdentifier");
+        if (from is not null && !IsBuildIdentifier(from))
+            return InvalidIdentifier("from");
+
+        var bundle = await store.ResolveSpriteBundleAsync(
+            from?.ToLowerInvariant(),
+            toBuildIdentifier.ToLowerInvariant(),
+            cancellationToken);
+        if (bundle is null)
+            return Results.NotFound();
+
+        if (HasMatchingEtag(context, bundle.ETag))
+            return Results.StatusCode(StatusCodes.Status304NotModified);
+
+        SetCacheHeaders(context, bundle.ETag, ImmutableCacheControl);
+        return Results.Stream(
+            stream => store.WriteSpriteBundleAsync(bundle, stream, cancellationToken),
+            "application/x-tar");
     }
 
     private static async Task<IResult> SubmitUpdateHintAsync(

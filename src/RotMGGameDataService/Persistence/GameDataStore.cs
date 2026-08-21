@@ -1,3 +1,4 @@
+using System.Formats.Tar;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using RotMGGameDataService.Configuration;
@@ -12,6 +13,10 @@ public sealed class GameDataStore(
     ILogger<GameDataStore> logger)
 {
     private const long RefreshAdvisoryLockId = 0x524F544D47444154;
+
+    /// <summary>Two zero-filled 512-byte blocks, which is an empty tar archive.</summary>
+    private static readonly byte[] EmptyArchiveTrailer = new byte[1024];
+
     private readonly UpdateOptions _updateOptions = updateOptions.Value;
 
     public async Task<bool> CanConnectAsync(CancellationToken cancellationToken)
@@ -142,6 +147,114 @@ public sealed class GameDataStore(
             "SELECT png_bytes FROM game_data_sprites WHERE sprite_hash = $1");
         command.Parameters.AddWithValue(hash);
         return await command.ExecuteScalarAsync(cancellationToken) as byte[];
+    }
+
+    /// <summary>
+    /// Resolves the build identifiers for a sprite bundle request.
+    /// </summary>
+    /// <remarks>
+    /// Returns <c>null</c> when either build is unknown. The bundle for a build,
+    /// or for a pair of builds, never changes, so the entity tag is derived from
+    /// the identifiers rather than from the bytes. That keeps the response
+    /// streamable instead of having to be buffered to be hashed.
+    /// </remarks>
+    public async Task<SpriteBundle?> ResolveSpriteBundleAsync(
+        string? fromIdentifier,
+        string toIdentifier,
+        CancellationToken cancellationToken)
+    {
+        var toBuild = await GetBuildAsync(toIdentifier, cancellationToken);
+        if (toBuild is null)
+            return null;
+
+        if (fromIdentifier is null)
+        {
+            return new SpriteBundle(toBuild.BuildId, null, toBuild.BuildId);
+        }
+
+        var fromBuild = await GetBuildAsync(fromIdentifier, cancellationToken);
+        if (fromBuild is null)
+            return null;
+
+        var tag = GameDataJson.HashBytes(
+            System.Text.Encoding.UTF8.GetBytes($"{fromBuild.BuildId}\n{toBuild.BuildId}"));
+        return new SpriteBundle(toBuild.BuildId, fromBuild.BuildId, tag);
+    }
+
+    /// <summary>
+    /// Writes every sprite in the bundle to <paramref name="output"/> as a tar
+    /// archive, one entry per sprite named by its content hash.
+    /// </summary>
+    /// <remarks>
+    /// Rows are streamed straight into the archive so only one sprite is held in
+    /// memory at a time, which matters because a full bundle is several thousand
+    /// entries. Tar pads every entry to a 512-byte boundary, so the route relies
+    /// on response compression to collapse that padding on the wire.
+    /// </remarks>
+    public async Task WriteSpriteBundleAsync(
+        SpriteBundle bundle,
+        Stream output,
+        CancellationToken cancellationToken)
+    {
+        const string allSpritesSql = """
+            SELECT s.sprite_hash, s.png_bytes
+            FROM game_data_build_sprites bs
+            JOIN game_data_sprites s ON s.sprite_hash = bs.sprite_hash
+            WHERE bs.build_id = $1
+            ORDER BY s.sprite_hash
+            """;
+        const string addedSpritesSql = """
+            SELECT s.sprite_hash, s.png_bytes
+            FROM game_data_build_sprites bs
+            JOIN game_data_sprites s ON s.sprite_hash = bs.sprite_hash
+            WHERE bs.build_id = $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM game_data_build_sprites previous
+                  WHERE previous.build_id = $2
+                    AND previous.sprite_hash = bs.sprite_hash
+              )
+            ORDER BY s.sprite_hash
+            """;
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            bundle.FromBuildId is null ? allSpritesSql : addedSpritesSql,
+            connection);
+        command.Parameters.AddWithValue(bundle.ToBuildId);
+        if (bundle.FromBuildId is not null)
+            command.Parameters.AddWithValue(bundle.FromBuildId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var spriteCount = 0;
+        await using (var archive = new TarWriter(output, TarEntryFormat.Ustar, leaveOpen: true))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var hash = reader.GetString(0).Trim();
+                var bytes = reader.GetFieldValue<byte[]>(1);
+                var entry = new UstarTarEntry(TarEntryType.RegularFile, $"{hash}.png")
+                {
+                    DataStream = new MemoryStream(bytes, writable: false),
+                };
+                await archive.WriteEntryAsync(entry, cancellationToken);
+                spriteCount++;
+            }
+        }
+
+        if (spriteCount == 0)
+        {
+            // TarWriter omits the end-of-archive marker when it wrote no entry,
+            // which leaves a zero-length body that tar readers reject. An empty
+            // bundle is a legitimate answer - the consumer already holds every
+            // sprite - so terminate the archive explicitly.
+            await output.WriteAsync(EmptyArchiveTrailer, cancellationToken);
+        }
+
+        logger.LogInformation(
+            "Streamed {SpriteCount} sprites for build {BuildId} (from {FromBuildId})",
+            spriteCount,
+            bundle.ToBuildId,
+            bundle.FromBuildId ?? "none");
     }
 
     public async Task<bool> PublishAsync(

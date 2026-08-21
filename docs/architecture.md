@@ -111,9 +111,18 @@ The PNG URL is based on its content hash, not the item ID or build ID. An
 unchanged image therefore keeps the same URL and remains cached across builds.
 Different item IDs may reference the same PNG hash.
 
-The first implementation will not generate a shared sprite atlas. Individual,
+The service does not generate a shared sprite atlas. Individual,
 content-addressed images make additions, deletions, modifications, caching,
 and diffs deterministic.
+
+Storage stays per-sprite, but transport does not have to. Measurement against
+the first real consumer showed a cold client needs about 6,200 sprites averaging
+roughly 400 bytes each, so requesting them individually spends far more on
+per-request overhead than on payload and exhausts any sane per-client rate limit.
+A bundle route therefore streams the sprites for a build, or only those a build
+added relative to another, as one tar archive of the same content-addressed
+files. Nothing about the storage model or the hashes changes; only the number of
+requests does.
 
 Player-stat definitions and fame bonuses are normalized from the extractor's
 existing `PlayerStat` and `FameBonus` models. Presentation-only concerns remain
