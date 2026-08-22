@@ -10,6 +10,7 @@ namespace RotMGGameDataService.Persistence;
 public sealed class GameDataStore(
     NpgsqlDataSource dataSource,
     IOptions<UpdateOptions> updateOptions,
+    IOptions<ServiceOptions> serviceOptions,
     ILogger<GameDataStore> logger)
 {
     private const long RefreshAdvisoryLockId = 0x524F544D47444154;
@@ -17,20 +18,43 @@ public sealed class GameDataStore(
     /// <summary>Two zero-filled 512-byte blocks, which is an empty tar archive.</summary>
     private static readonly byte[] EmptyArchiveTrailer = new byte[1024];
 
-    private readonly UpdateOptions _updateOptions = updateOptions.Value;
+    private static readonly TimeSpan ReadinessCacheDuration = TimeSpan.FromSeconds(1);
+    private DateTimeOffset _readinessCheckedAt = DateTimeOffset.MinValue;
+    private bool _isReady;
 
+    private readonly UpdateOptions _updateOptions = updateOptions.Value;
+    private readonly ServiceOptions _serviceOptions = serviceOptions.Value;
+
+    /// <summary>
+    /// Reports whether PostgreSQL is reachable, reusing a recent answer.
+    /// </summary>
+    /// <remarks>
+    /// Readiness is unauthenticated and deliberately not rate limited, because a
+    /// limit risks failing legitimate platform probes. Caching the result for a
+    /// moment bounds the work a burst of requests can cause instead: without it,
+    /// repeated probing occupies the connection pool that real traffic needs.
+    /// </remarks>
     public async Task<bool> CanConnectAsync(CancellationToken cancellationToken)
     {
+        var now = DateTimeOffset.UtcNow;
+        if (now - _readinessCheckedAt < ReadinessCacheDuration)
+            return _isReady;
+
+        bool isReady;
         try
         {
             await using var command = dataSource.CreateCommand("SELECT 1");
-            return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) == 1;
+            isReady = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) == 1;
         }
         catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
         {
             logger.LogWarning(exception, "PostgreSQL readiness check failed");
-            return false;
+            isReady = false;
         }
+
+        _isReady = isReady;
+        _readinessCheckedAt = now;
+        return isReady;
     }
 
     public async Task<RefreshLease?> TryAcquireRefreshLeaseAsync(
@@ -333,6 +357,64 @@ public sealed class GameDataStore(
             extraction.Manifest.BuildId,
             manifestHash);
         return true;
+    }
+
+    /// <summary>
+    /// Deletes builds beyond the retained window, and any sprite left unreferenced.
+    /// </summary>
+    /// <remarks>
+    /// Called after a successful publication. Deleting a build cascades to its
+    /// sprite references and its diffs, after which a sprite no retained build
+    /// mentions is unreachable and removed too. The latest build is ordered first
+    /// so it can never be pruned, whatever the timestamps say.
+    /// </remarks>
+    public async Task<(int Builds, int Sprites)> PruneRetainedBuildsAsync(
+        CancellationToken cancellationToken)
+    {
+        if (_serviceOptions.RetainedBuildCount <= 0)
+            return (0, 0);
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        int prunedBuilds;
+        await using (var buildCommand = new NpgsqlCommand("""
+            WITH retained AS (
+                SELECT build_id FROM game_data_builds
+                ORDER BY is_latest DESC, generated_at DESC
+                LIMIT $1
+            )
+            DELETE FROM game_data_builds
+            WHERE build_id NOT IN (SELECT build_id FROM retained)
+            """, connection, transaction))
+        {
+            buildCommand.Parameters.AddWithValue(_serviceOptions.RetainedBuildCount);
+            prunedBuilds = await buildCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        int prunedSprites;
+        await using (var spriteCommand = new NpgsqlCommand("""
+            DELETE FROM game_data_sprites
+            WHERE NOT EXISTS (
+                SELECT 1 FROM game_data_build_sprites
+                WHERE game_data_build_sprites.sprite_hash = game_data_sprites.sprite_hash
+            )
+            """, connection, transaction))
+        {
+            prunedSprites = await spriteCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        if (prunedBuilds > 0 || prunedSprites > 0)
+        {
+            logger.LogInformation(
+                "Pruned {BuildCount} builds beyond the retained {RetainedCount} and {SpriteCount} unreferenced sprites",
+                prunedBuilds,
+                _serviceOptions.RetainedBuildCount,
+                prunedSprites);
+        }
+
+        return (prunedBuilds, prunedSprites);
     }
 
     public async Task<HintResult> RecordHintAsync(

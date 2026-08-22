@@ -87,7 +87,7 @@ Monitor at minimum:
 - `GET /health/ready` for API and database readiness.
 - `GET /api/v1/status` for stale checks, pending hints, and refresh errors.
 - container restart counts and unhealthy states.
-- worker logs for extraction or official metadata failures.
+- updater logs, or failed CronJob runs, for extraction or metadata failures.
 - backup health and the age/size of the newest dump.
 - free space under `DATA_ROOT`.
 
@@ -125,6 +125,22 @@ transient and never written anywhere.
 If a request log is ever needed for troubleshooting, `deploy/nginx.conf` carries
 a commented format that records neither the client nor the requested item.
 
+## Retention
+
+`Service:RetainedBuildCount` bounds how many builds are kept, defaulting to ten.
+Pruning runs after a successful publication, so storage settles at roughly ten
+manifests plus the sprites those builds reference rather than growing for the
+life of the deployment.
+
+Deleting a build removes its sprite references and its diffs. A sprite no
+retained build mentions is then unreachable and removed as well; one still shared
+with a retained build is kept. The latest build is never pruned.
+
+The retained window is also the diff window: a consumer whose build has been
+pruned gets `404` for its diff and falls back to a full manifest, which is
+correct but larger. Raise the count to widen that window, or set it to zero to
+retain everything and accept unbounded growth.
+
 ## Rollback
 
 Application releases are stateless apart from PostgreSQL and the worker cache.
@@ -139,7 +155,7 @@ The Compose stack in this repository is for development and single-host use. In
 the EAM cluster only the application image is deployed:
 
 - an API Deployment with at least two `serve` replicas;
-- one `worker` replica (the advisory lock still prevents overlap);
+- a CronJob invoking `refresh`;
 - the shared PostgreSQL instance used by the other EAM APIs;
 - the existing ingress, which provides TLS and cluster-wide rate limiting.
 
@@ -148,9 +164,63 @@ deployed. The backup process in particular runs `pg_dump` against the whole
 database: against the shared instance it would capture every other service's
 tables, so central cluster backups are used instead.
 
-Keep API pods stateless and give the worker ephemeral scratch space at the path
-in `Realm__WorkDirectory`. The runtime image is chiseled and already runs as UID
+Keep API pods stateless. The runtime image is chiseled and already runs as UID
 1654, so mounted volumes must be writable by that UID.
+
+### Publishing builds
+
+`serve` mode never publishes anything. It maps the read endpoints and nothing
+else, so an API-only deployment answers `503 No game-data build has been
+published yet` indefinitely. Publication is entirely the updater's job.
+
+Two shapes work, from the same image:
+
+| | Argument | Instances |
+| --- | --- | --- |
+| Scheduled, preferred | `refresh` | one CronJob |
+| Long-running | `worker` | exactly one replica |
+
+`refresh` performs one check and exits. `worker` performs the same check on a
+timer and additionally acts on pending update hints. Both take a PostgreSQL
+advisory lock first, so overlapping invocations return `busy` rather than
+competing.
+
+The scheduled form is preferred for three reasons. A long-running updater
+reserves its memory request permanently while doing nothing almost all of the
+time. Its scratch directory is never pruned, so it accumulates roughly 400 MB
+per distinct build for as long as the process lives, whereas a per-run volume
+starts empty. And each run being a fresh process means no extractor state can
+carry from one build to the next.
+
+The trade-off is that update hints are only acted on at the next scheduled run
+rather than within seconds, which costs nothing while no consumer sends them.
+
+A check costs two small HTTPS requests and two queries when nothing has changed:
+the large download and the extraction happen only when the upstream
+`resources.assets` checksum differs from the published build. A frequent
+schedule is therefore inexpensive, and the schedule is what determines how
+quickly a new game build is picked up.
+
+### Updater requirements
+
+Both forms need more than the API pods do:
+
+- **Outbound internet access** to `realmofthemadgod.com` and the configured CDN
+  host. The API pods need none. When egress is blocked the failure is quiet: the
+  updater keeps reporting failed checks and the API keeps answering `503`.
+- **Memory** for extraction, which has peaked near 3.2 GB.
+- **Ephemeral scratch space** at the path in `Realm__WorkDirectory`, which the
+  image sets to `/data`. Around 500 MB per build is enough for a scheduled run.
+- **No inbound access.** Neither form binds a port, so they need no Service, no
+  ingress and no DNS entry. An HTTP liveness probe would fail immediately and
+  restart the container forever; use no probe, or an exec probe.
+
+Bootstrap a first build without waiting for the schedule by creating a job from
+the CronJob directly. A one-shot run is also the recovery path after a failed
+publication.
+
+Do not set `DEBUG_MODE` in the cluster: it disables transport encryption to the
+database.
 
 ### Database configuration
 

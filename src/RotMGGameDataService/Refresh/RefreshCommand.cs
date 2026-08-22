@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RotMGGameDataService.Configuration;
+using RotMGGameDataService.Data;
 using RotMGGameDataService.Extraction;
 using RotMGGameDataService.Persistence;
 using RotMGGameDataService.Realm;
@@ -11,6 +12,7 @@ public sealed class RefreshCommand(
     RealmBuildClient realmBuildClient,
     ExtractionProbe extractionProbe,
     GameDataStore gameDataStore,
+    BuildIdentity buildIdentity,
     IOptions<RealmOptions> realmOptions)
 {
     public async Task<int> RunAsync(CancellationToken cancellationToken)
@@ -35,11 +37,14 @@ public sealed class RefreshCommand(
         {
             var build = await realmBuildClient.DiscoverAsync(cancellationToken);
             var latest = await gameDataStore.GetLatestBuildAsync(cancellationToken);
+
+            // Compared on the derived build identity rather than the source
+            // checksum alone. The identity also covers the schema, extractor and
+            // renderer versions, so bumping any of those republishes the same
+            // upstream file, which is what the API contract promises.
+            var expectedBuildId = buildIdentity.Calculate(build.Resource.Checksum);
             if (latest is not null
-                && string.Equals(
-                    latest.SourceChecksum,
-                    build.Resource.Checksum,
-                    StringComparison.Ordinal))
+                && string.Equals(latest.BuildId, expectedBuildId, StringComparison.Ordinal))
             {
                 await gameDataStore.MarkRefreshSuccessfulAsync(cancellationToken);
                 return new RefreshOutcome(
@@ -59,6 +64,20 @@ public sealed class RefreshCommand(
                 realmOptions.Value.WorkDirectory,
                 cancellationToken);
             var published = await gameDataStore.PublishAsync(extraction, cancellationToken);
+            if (published)
+            {
+                // Storage housekeeping, not part of publishing: a failure here
+                // must not undo a build that is already live.
+                try
+                {
+                    await gameDataStore.PruneRetainedBuildsAsync(cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    Console.Error.WriteLine($"Could not prune retained builds: {exception.Message}");
+                }
+            }
+
             await gameDataStore.MarkRefreshSuccessfulAsync(cancellationToken);
             return new RefreshOutcome(
                 published ? "published" : "already-published",

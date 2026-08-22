@@ -32,8 +32,14 @@ internal static partial class RealmBuildParser
         var buildHash = GetRequiredElement(document, "BuildHash").ToLowerInvariant();
         var buildCdnText = GetRequiredElement(document, "BuildCDN");
 
-        if (!BuildIdPattern().IsMatch(buildId))
+        // The build ID becomes a path segment. Escaping leaves dots untouched, so
+        // a traversal sequence would resolve to a different path on the CDN even
+        // though the host stays allow-listed.
+        if (!BuildIdPattern().IsMatch(buildId)
+            || buildId.Contains("..", StringComparison.Ordinal))
+        {
             throw new InvalidDataException("Realm returned an invalid build ID.");
+        }
         if (!Md5Pattern().IsMatch(buildHash))
             throw new InvalidDataException("Realm returned an invalid build hash.");
         if (!Uri.TryCreate(buildCdnText, UriKind.Absolute, out var buildCdn)
@@ -123,6 +129,10 @@ internal static partial class RealmBuildParser
     {
         if (!allowedHosts.Contains(uri.IdnHost, StringComparer.OrdinalIgnoreCase))
             throw new InvalidDataException($"Realm returned untrusted CDN host '{uri.IdnHost}'.");
+
+        // Allow-listing the host alone would still permit an arbitrary port on it.
+        if (!uri.IsDefaultPort)
+            throw new InvalidDataException($"Realm returned a non-default CDN port for '{uri.IdnHost}'.");
     }
 
     [GeneratedRegex("^[A-Za-z0-9._-]{1,128}$", RegexOptions.CultureInvariant)]

@@ -190,7 +190,8 @@ Before production deployment, define:
 - production hostname and CDN behavior;
 - PostgreSQL secret and migration conventions;
 - CPU, memory, and temporary-storage requests based on the Linux spike;
-- retained build count and sprite garbage-collection policy;
+- ~~retained build count and sprite garbage-collection policy~~ (implemented:
+  `Service:RetainedBuildCount`, default ten, pruned after publication);
 - metrics for last check, last successful publication, duration, counts, hints,
   failures, and HTTP 429 responses;
 - an alert when the updater repeatedly fails or a reported build remains

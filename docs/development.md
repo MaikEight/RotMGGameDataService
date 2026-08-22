@@ -21,10 +21,11 @@ dotnet test RotMGGameDataService.sln --configuration Release --no-build
 dotnet list src/RotMGGameDataService/RotMGGameDataService.csproj package --vulnerable --include-transitive
 ```
 
-The tests do not require the Realm servers. Fixtures cover trusted URL
-selection, deterministic JSON and hashing, model mapping, diffs, and PNG
-properties. A live refresh is intentionally separate because it downloads the
-current client archive.
+The tests do not require the Realm servers. They cover trusted URL selection and
+rejection, deterministic JSON and byte hashing, the object catalog hash, build
+identity, and diff construction. Rendering and model mapping are not covered,
+because both need a real `resources.assets`; a live refresh is intentionally
+separate for the same reason.
 
 ## Compose environment
 

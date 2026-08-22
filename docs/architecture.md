@@ -31,13 +31,14 @@ Realm build metadata --------> updater worker ---> RotMGAssetExtractor
                                            consumers
 ```
 
-The application has two modes:
+The application has three modes, selected by the first argument:
 
-- `serve`: starts the ASP.NET API and accepts read requests and update hints.
+- `serve`: starts the ASP.NET API and accepts read requests and update hints. It
+  never publishes a build.
 - `worker`: waits for update hints, performs scheduled checks, and publishes
   confirmed builds.
-- `refresh`: performs the worker's check once and exits for development and
-  recovery tasks.
+- `refresh`: performs the same check once and exits. This is what a scheduled
+  deployment runs, and also the manual recovery path.
 
 ## Public update hints
 
@@ -246,11 +247,14 @@ Rate limiting is applied in layers:
   view may legitimately request many images.
 - Health endpoints are excluded.
 
-Forwarded client addresses are trusted only from configured load balancer
-proxies. Public hints may wake the updater, but cannot choose an upstream URL or
-authorize extraction. The updater also checks metadata on a schedule, retries
-transient failures a small number of times with backoff and jitter, and
-downloads only after the official endpoint reports a new build.
+Forwarded client addresses are honoured only when `Proxy:TrustForwardedHeaders`
+is enabled, which is intended for a deployment whose gateway replaces the header
+rather than appending to it. Public hints may wake the updater, but cannot choose
+an upstream URL or authorize extraction.
+
+A failed check leaves the previous build published and is retried on the next
+scheduled run rather than immediately, so a persistent upstream failure produces
+one attempt per interval instead of a tight loop.
 
 ## Deployment model
 
@@ -261,8 +265,16 @@ backups. The same worker mode supports a one-shot invocation for manual tests.
 Production uses the same image in two Kubernetes workloads:
 
 - A Deployment with at least two `serve` replicas.
-- A Deployment with one lightweight `worker` replica.
+- A CronJob invoking `refresh`.
 
-The worker wakes for persisted client hints and also checks every few hours as a
-fallback. Extraction still occurs only when Realm's official endpoint confirms
-a new build.
+`serve` never publishes anything; it is a read-only API. Publication is entirely
+the updater's job, which is why the second workload is not optional.
+
+A scheduled `refresh` is preferred over a long-running `worker` Deployment. The
+check is cheap when nothing has changed, so the schedule can be frequent, and a
+fresh process per run keeps no state between builds. The `worker` mode remains
+available for a deployment that would rather run one long-lived process, and is
+what the Compose stack uses.
+
+Extraction still occurs only when Realm's official endpoint reports a different
+`resources.assets` checksum than the published build.

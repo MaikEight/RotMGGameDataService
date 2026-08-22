@@ -50,6 +50,35 @@ public sealed class RealmBuildParserTests
     }
 
     [Fact]
+    public void ParseAppInit_RejectsTraversalInTheBuildId()
+    {
+        // The build ID becomes a path segment and escaping leaves dots alone, so
+        // a traversal sequence would resolve elsewhere on the allow-listed host.
+        var xml = ReadFixture("app-init.xml")
+            .Replace("rotmg-exalt-win-64", "../../secrets", StringComparison.Ordinal);
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            RealmBuildParser.ParseAppInit(xml, AllowedHosts));
+
+        Assert.Contains("invalid build ID", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseAppInit_RejectsANonDefaultCdnPort()
+    {
+        var xml = ReadFixture("app-init.xml")
+            .Replace(
+                "https://rotmg-build.decagames.com/build-release/",
+                "https://rotmg-build.decagames.com:8443/build-release/",
+                StringComparison.Ordinal);
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            RealmBuildParser.ParseAppInit(xml, AllowedHosts));
+
+        Assert.Contains("non-default CDN port", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ParseResourceFile_RequiresExactExpectedPath()
     {
         var appInit = RealmBuildParser.ParseAppInit(

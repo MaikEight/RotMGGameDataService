@@ -46,6 +46,11 @@ public sealed class ExtractionProbe(
         var generatedAt = DateTimeOffset.UtcNow;
         var buildId = buildIdentity.Calculate(build.Resource.Checksum);
         logger.LogInformation("Loading Realm resources from {ResourcesPath}", resourcesAssetsPath);
+        // The extractor keeps decoded atlases in static state behind a one-way
+        // latch, so a second extraction in the same process would render fresh
+        // sprite coordinates against the previous build's pixels. Clearing first
+        // makes each run independent of the last.
+        AssetImageBuffer.Clear();
         await global::RotMGAssetExtractor.RotMGAssetExtractor.LoadLocalResourcesAsync(
             resourcesAssetsPath);
 
@@ -102,35 +107,50 @@ public sealed class ExtractionProbe(
                 continue;
             }
 
-            using var source = AssetImageBuffer.GetImage(texture, objectId);
-            if (source is null || source.Width <= 0 || source.Height <= 0)
+            var source = AssetImageBuffer.GetImage(texture, objectId);
+
+            // For degenerate sprite bounds the extractor hands back a shared
+            // placeholder rather than a fresh crop. Disposing that would break
+            // every later object taking the same path, so ownership is checked
+            // before releasing it.
+            var isSharedPlaceholder = source is not null
+                && ReferenceEquals(source, AssetImageBuffer.GetEmptyImg());
+            try
             {
-                failedImageCount++;
-                continue;
+                if (source is null || source.Width <= 0 || source.Height <= 0)
+                {
+                    failedImageCount++;
+                    continue;
+                }
+
+                using var tile = BuildTile(source);
+                var visualHash = CalculatePixelHash(tile);
+                await using var pngStream = new MemoryStream();
+                await tile.SaveAsPngAsync(pngStream, cancellationToken);
+                var pngBytes = pngStream.ToArray();
+                var pngHash = Convert.ToHexString(SHA256.HashData(pngBytes)).ToLowerInvariant();
+
+                visualHashes.Add(visualHash);
+                visualCatalogEntries.Add($"{objectId}:{visualHash}");
+                pngCatalogEntries.Add($"{objectId}:{pngHash}");
+                objectRecords[objectId.ToString(CultureInfo.InvariantCulture)] =
+                    CreateObjectRecord(model, objectId, pngHash);
+
+                if (pngHashes.Add(pngHash))
+                {
+                    uniquePngBytes += pngBytes.Length;
+                    sprites[pngHash] = pngBytes;
+                    var hashDirectory = Path.Combine(spriteDirectory, pngHash[..2]);
+                    Directory.CreateDirectory(hashDirectory);
+                    var spritePath = Path.Combine(hashDirectory, pngHash + ".png");
+                    if (!File.Exists(spritePath))
+                        await File.WriteAllBytesAsync(spritePath, pngBytes, cancellationToken);
+                }
             }
-
-            using var tile = BuildTile(source);
-            var visualHash = CalculatePixelHash(tile);
-            await using var pngStream = new MemoryStream();
-            await tile.SaveAsPngAsync(pngStream, cancellationToken);
-            var pngBytes = pngStream.ToArray();
-            var pngHash = Convert.ToHexString(SHA256.HashData(pngBytes)).ToLowerInvariant();
-
-            visualHashes.Add(visualHash);
-            visualCatalogEntries.Add($"{objectId}:{visualHash}");
-            pngCatalogEntries.Add($"{objectId}:{pngHash}");
-            objectRecords[objectId.ToString(CultureInfo.InvariantCulture)] =
-                CreateObjectRecord(model, objectId, pngHash);
-
-            if (pngHashes.Add(pngHash))
+            finally
             {
-                uniquePngBytes += pngBytes.Length;
-                sprites[pngHash] = pngBytes;
-                var hashDirectory = Path.Combine(spriteDirectory, pngHash[..2]);
-                Directory.CreateDirectory(hashDirectory);
-                var spritePath = Path.Combine(hashDirectory, pngHash + ".png");
-                if (!File.Exists(spritePath))
-                    await File.WriteAllBytesAsync(spritePath, pngBytes, cancellationToken);
+                if (!isSharedPlaceholder)
+                    source?.Dispose();
             }
 
             processedCount++;
