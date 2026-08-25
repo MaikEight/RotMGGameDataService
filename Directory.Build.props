@@ -3,7 +3,7 @@
     <!-- The release workflow tags the container image with this, the way the
          other EAM APIs tag from the version in package.json. Bump it in its own
          commit before merging a release. -->
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <LangVersion>12.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
