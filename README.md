@@ -65,6 +65,7 @@ dotnet test RotMGGameDataService.sln
 | `GET /api/v1/sprites/{sha256}.png` | Content-addressed rendered sprite. |
 | `POST /api/v1/update-hints` | Queue a bounded official update check. |
 | `GET /api/v1/status` | Publication and updater status. |
+| `GET /info` | Service name, version, author, and last restart. |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL-backed readiness. |
 
