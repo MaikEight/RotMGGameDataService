@@ -1,6 +1,7 @@
 # API Contract
 
-This document describes the implemented version 1 HTTP contract.
+This document describes the implemented version 1 HTTP contract, currently
+serving schema version 2 payloads.
 
 ## Conventions
 
@@ -15,6 +16,26 @@ This document describes the implemented version 1 HTTP contract.
 - Immutable resources support `ETag` and `If-None-Match`.
 - JSON responses support Brotli and gzip response compression.
 
+## Schema versions
+
+The route path stays `/api/v1`; `schemaVersion` describes the payload. It is
+folded into the build ID, so a schema change publishes new immutable builds and
+leaves already-published ones readable at their original version.
+
+| Version | Change |
+| --- | --- |
+| 2 | Fame bonuses gained `description` and `shortDisplayName`, and stray whitespace is trimmed from their ids. |
+| 1 | Initial contract. |
+
+Schema 1 dropped both fame-bonus text fields, because the extractor's model
+declares them as numbers and the client writes them as text. It also published
+two ids with a trailing carriage return, `PotionDrinker` and `CritterFoe`, which
+the client ships that way; anything keying on the id saw them as distinct from
+the names used everywhere else.
+
+Nothing else about a fame bonus changed. Conditions, bonuses, and every other
+field are byte-for-byte what schema 1 published.
+
 ## Get the latest build
 
 ```http
@@ -23,7 +44,7 @@ GET /api/v1/builds/latest
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "buildId": "5f7b6e64160ce740ec0b7c9efb8b0b71a21a0c80e76ec46cf1fd6f8ca27b84a9",
   "realmBuildHash": "aeceb1f212da9dcaba9e6c41a34c9d69",
   "sourceChecksum": "c32dd849645d89ff0841eabfd8c17a67",
@@ -93,7 +114,7 @@ The manifest structure is:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "buildId": "service-build-sha256",
   "realmBuildHash": "realm-build-md5",
   "sourceChecksum": "resources-assets-md5",
@@ -140,11 +161,53 @@ The manifest structure is:
       "metadataHash": "metadata-sha256"
     }
   },
-  "fameBonuses": [],
+  "fameBonuses": [
+    {
+      "id": "Undead ForestAdversary",
+      "code": 548,
+      "displayGroup": "Enemy Bonuses",
+      "displayCategory": "Undead Forest Kills",
+      "displayName": "Undead Forest Adversary",
+      "shortDisplayName": "Adversary",
+      "description": "Kill 1000 Undead Forest Enemies",
+      "absoluteBonus": 100,
+      "relativeBonus": 0,
+      "maxRepeatCount": 0,
+      "repeatable": false,
+      "conditions": [
+        {
+          "threshold": 100,
+          "stat": "Undead Forest",
+          "value": "StatValue"
+        }
+      ],
+      "metadataHash": "metadata-sha256"
+    }
+  ],
   "playerStatsHash": "section-sha256",
   "fameBonusesHash": "section-sha256"
 }
 ```
+
+A fame bonus is earned when every one of its `conditions` holds. A condition's
+`value` names how it is tested; current builds use `StatValue` (the player stat
+named by `stat` has reached `threshold`), `MaxedStat` (that stat is at its
+maximum), and `FirstCharacter`. `stat` is absent for a type that reads none. A
+`repeatable` bonus grants its value once per whole multiple of the threshold, up
+to `maxRepeatCount` times, and its display names contain a `{0}` placeholder for
+the repeat count.
+
+`displayGroup`, `displayCategory`, `displayName`, `shortDisplayName`, and
+`description` are omitted when the client leaves them empty. The first two are
+what group the flat list for display.
+
+Every field is reproduced from the client as published. It is worth knowing that
+the client contradicts itself on the per-biome kill bonuses: the example above
+declares `threshold` 100 while its own description says 1000, and the same gap
+appears on the `Adversary` and `Slaughterer` tier of all 20 biomes. The service
+does not correct it, because the threshold is what the game evaluates against
+and rewriting it would be inventing data. A consumer that shows progress should
+prefer `threshold` and treat `description` as prose.
 
 `objects` is deliberately neutral: the Realm client contains renderable
 equipment, tokens, portals, characters, and other object categories. A
@@ -165,7 +228,7 @@ GET /api/v1/builds/{toBuildIdentifier}/diff?from={fromBuildIdentifier}
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "fromBuildId": "old-service-build-sha256",
   "toBuildId": "new-service-build-sha256",
   "realmBuildHash": "realm-build-md5",

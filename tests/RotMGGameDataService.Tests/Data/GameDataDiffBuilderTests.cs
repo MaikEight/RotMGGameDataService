@@ -84,7 +84,7 @@ public sealed class GameDataDiffBuilderTests
         {
             ["1"] = new(1, "stat", 0, false, null, null, false, null, statsHash),
         },
-        [new("bonus", 1, null, null, null, 0, 0, 0, false, [], fameHash)],
+        [new("bonus", 1, null, null, null, null, null, 0, 0, 0, false, [], fameHash)],
         statsHash,
         fameHash);
 

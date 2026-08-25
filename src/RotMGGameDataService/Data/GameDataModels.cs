@@ -52,6 +52,8 @@ public sealed record FameBonusRecord(
     string? DisplayGroup,
     string? DisplayCategory,
     string? DisplayName,
+    string? ShortDisplayName,
+    string? Description,
     int AbsoluteBonus,
     float RelativeBonus,
     int MaxRepeatCount,
