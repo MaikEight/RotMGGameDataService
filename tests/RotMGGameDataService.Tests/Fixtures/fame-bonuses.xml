@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Verbatim fame bonuses from Realm build 974bde45c06b313b1e425bc2cb222c75,
+  taken from the client's "players" text asset. Kept exactly as the client
+  writes them, including the escaped carriage return in two ids, so the reader
+  is tested against real markup rather than an invented shape.
+-->
+<Objects>
+  <FameBonus id="Ancestor" code="1">
+    <DisplayGroup>Character Bonuses</DisplayGroup>
+    <DisplayCategory>Ancestor</DisplayCategory>
+    <DisplayName>Ancestor</DisplayName>
+    <AbsoluteBonus>0</AbsoluteBonus>
+    <RelativeBonus>10</RelativeBonus>
+    <Description>This is your first character in Realm of the Mad God!</Description>
+    <Condition threshold="0">FirstCharacter</Condition>
+  </FameBonus>
+  <FameBonus id="PotionDrinker&#xD;" code="30">
+    <DisplayGroup>Stats Bonuses</DisplayGroup>
+    <DisplayCategory>Potions</DisplayCategory>
+    <DisplayName>Potion Drinker</DisplayName>
+    <AbsoluteBonus>20</AbsoluteBonus>
+    <Description>Drink 25 potions</Description>
+    <Condition stat="PotionsDrunk" threshold="25">StatValue</Condition>
+  </FameBonus>
+  <FameBonus id="Undead ForestAdversary" code="548">
+    <DisplayGroup>Enemy Bonuses</DisplayGroup>
+    <DisplayCategory>Undead Forest Kills</DisplayCategory>
+    <DisplayName>Undead Forest Adversary</DisplayName>
+    <AbsoluteBonus>100</AbsoluteBonus>
+    <Description>Kill 1000 Undead Forest Enemies</Description>
+    <ShortDisplayName>Adversary</ShortDisplayName>
+    <Condition stat="Undead Forest" threshold="100">StatValue</Condition>
+  </FameBonus>
+  <FameBonus id="Undead ForestNemesis" code="461">
+    <DisplayGroup>Enemy Bonuses</DisplayGroup>
+    <DisplayCategory>Undead Forest Kills</DisplayCategory>
+    <DisplayName>Undead Forest Nemesis {0}</DisplayName>
+    <Repeatable>true</Repeatable>
+    <AbsoluteBonus>2500</AbsoluteBonus>
+    <Description>Kill 50000 Undead Forest Enemies</Description>
+    <ShortDisplayName>Nemesis {0}</ShortDisplayName>
+    <MaxRepeatCount>20</MaxRepeatCount>
+    <Condition stat="Undead Forest" threshold="50000">StatValue</Condition>
+  </FameBonus>
+  <FameBonus id="Maxed_Life" code="20">
+    <DisplayGroup>Stats Bonuses</DisplayGroup>
+    <DisplayCategory>Maxed Life</DisplayCategory>
+    <DisplayName>Maxed Life</DisplayName>
+    <AbsoluteBonus>50</AbsoluteBonus>
+    <Description>Max your HP</Description>
+    <Condition stat="health" threshold="1">MaxedStat</Condition>
+  </FameBonus>
+  <FameBonus id="TunnelRat" code="70">
+    <DisplayGroup>Dungeon Bonuses</DisplayGroup>
+    <DisplayCategory>Dungeon Collection</DisplayCategory>
+    <DisplayName>Tunnel Rat</DisplayName>
+    <AbsoluteBonus>3000</AbsoluteBonus>
+    <RelativeBonus>7.5</RelativeBonus>
+    <Description>Complete every starter dungeon</Description>
+    <Condition stat="PirateCavesCompleted" threshold="1">StatValue</Condition>
+    <Condition stat="SnakePitsCompleted" threshold="1">StatValue</Condition>
+    <Condition stat="WineCellarsCompleted" threshold="2">StatValue</Condition>
+  </FameBonus>
+  <PlayerStat id="NotAFameBonus" />
+</Objects>

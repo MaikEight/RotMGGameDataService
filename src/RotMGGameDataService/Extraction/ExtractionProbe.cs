@@ -45,6 +45,17 @@ public sealed class ExtractionProbe(
         var stopwatch = Stopwatch.StartNew();
         var generatedAt = DateTimeOffset.UtcNow;
         var buildId = buildIdentity.Calculate(build.Resource.Checksum);
+
+        // Read before the extractor loads the same file, so the two copies of
+        // the asset bytes never overlap in memory.
+        var fameBonusDefinitions = await FameBonusXmlReader.ReadAsync(
+            resourcesAssetsPath,
+            cancellationToken);
+        logger.LogInformation(
+            "Read {FameBonusCount} fame bonuses with {ConditionCount} conditions",
+            fameBonusDefinitions.Count,
+            fameBonusDefinitions.Sum(definition => definition.Conditions.Count));
+
         logger.LogInformation("Loading Realm resources from {ResourcesPath}", resourcesAssetsPath);
         // The extractor keeps decoded atlases in static state behind a one-way
         // latch, so a second extraction in the same process would render fresh
@@ -164,7 +175,7 @@ public sealed class ExtractionProbe(
         }
 
         var playerStats = CreatePlayerStats();
-        var fameBonuses = CreateFameBonuses();
+        var fameBonuses = CreateFameBonuses(fameBonusDefinitions);
         var manifest = new GameDataManifest(
             buildIdentity.SchemaVersion,
             buildId,
@@ -193,6 +204,8 @@ public sealed class ExtractionProbe(
             visualHashes.Count,
             pngHashes.Count,
             uniquePngBytes,
+            fameBonuses.Count,
+            fameBonuses.Sum(bonus => bonus.Conditions.Count),
             CalculateCatalogHash(visualCatalogEntries),
             CalculateCatalogHash(pngCatalogEntries),
             outputDirectory);
@@ -281,33 +294,36 @@ public sealed class ExtractionProbe(
         return records;
     }
 
-    private static IReadOnlyList<FameBonusRecord> CreateFameBonuses()
+    /// <summary>
+    /// Normalizes the fame bonuses read from the client's XML.
+    /// </summary>
+    /// <remarks>
+    /// These come from <see cref="FameBonusXmlReader"/> rather than the
+    /// extractor's <c>FameBonus</c> model, because that model drops the two
+    /// text fields; its remarks explain why.
+    /// </remarks>
+    internal static IReadOnlyList<FameBonusRecord> CreateFameBonuses(
+        IReadOnlyList<FameBonusDefinition> definitions)
     {
-        if (!global::RotMGAssetExtractor.RotMGAssetExtractor.BuildModelsByType.TryGetValue(
-                "FameBonus",
-                out var models))
+        var records = new List<FameBonusRecord>(definitions.Count);
+        foreach (var bonus in definitions
+                     .OrderBy(value => value.Code)
+                     .ThenBy(value => value.Id, StringComparer.Ordinal))
         {
-            return [];
-        }
-
-        var records = new List<FameBonusRecord>();
-        foreach (var bonus in models
-                     .OfType<FameBonus>()
-                     .OrderBy(value => value.code)
-                     .ThenBy(value => value.id, StringComparer.Ordinal))
-        {
-            var conditions = (bonus.Condition ?? [])
+            var conditions = bonus.Conditions
                 .Select(condition => new FameConditionRecord(
-                    condition.threshold,
-                    NullIfEmpty(condition.stat),
-                    NullIfEmpty(condition.Value)))
+                    condition.Threshold,
+                    NullIfEmpty(condition.Stat),
+                    NullIfEmpty(condition.Type)))
                 .ToArray();
             var record = new FameBonusRecord(
-                bonus.id ?? string.Empty,
-                bonus.code,
+                bonus.Id,
+                bonus.Code,
                 NullIfEmpty(bonus.DisplayGroup),
                 NullIfEmpty(bonus.DisplayCategory),
                 NullIfEmpty(bonus.DisplayName),
+                NullIfEmpty(bonus.ShortDisplayName),
+                NullIfEmpty(bonus.Description),
                 bonus.AbsoluteBonus,
                 bonus.RelativeBonus,
                 bonus.MaxRepeatCount,

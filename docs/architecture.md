@@ -125,9 +125,21 @@ added relative to another, as one tar archive of the same content-addressed
 files. Nothing about the storage model or the hashes changes; only the number of
 requests does.
 
-Player-stat definitions and fame bonuses are normalized from the extractor's
-existing `PlayerStat` and `FameBonus` models. Presentation-only concerns remain
-with the consuming application.
+Player-stat definitions are normalized from the extractor's existing
+`PlayerStat` model. Presentation-only concerns remain with the consuming
+application.
+
+Fame bonuses do not use the extractor's `FameBonus` model. That model declares
+`Description` and `ShortDisplayName` as `int` while the client writes both as
+text, so the mapper parses them as numbers and the text is gone before the model
+exists. `FameBonusXmlReader` reads the client's XML text assets directly
+instead, in a pass that materializes only text assets and so skips the texture
+decoding that dominates extraction. Reading the XML also trims the stray
+carriage return the client ships inside two bonus ids.
+
+Every other field it produces is identical to the model's, verified against the
+published manifest for build `974bde45c06b313b1e425bc2cb222c75` across all 612
+bonuses and 817 conditions.
 
 ## Build comparison
 
