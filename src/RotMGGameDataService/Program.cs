@@ -109,6 +109,9 @@ builder.Services.AddSingleton(serviceProvider =>
     var configuration = serviceProvider.GetRequiredService<IConfiguration>();
     return new NpgsqlDataSourceBuilder(DatabaseConnection.Resolve(configuration)).Build();
 });
+// Constructed here rather than resolved lazily, so the timestamp /info reports
+// is when the process started and not when something first called the route.
+builder.Services.AddSingleton(new ServiceInfo());
 builder.Services.AddSingleton<DatabaseInitializer>();
 builder.Services.AddSingleton<GameDataStore>();
 builder.Services.AddSingleton<BuildIdentity>();

@@ -18,6 +18,11 @@ public static class ApiEndpoints
             health = "/health/ready",
         })).RequireRateLimiting(RateLimitPolicies.Metadata);
 
+        // The shape every EAM service publishes, so one probe reads them all.
+        app.MapGet("/info", (ServiceInfo serviceInfo) =>
+                Results.Json(serviceInfo.Describe(), ServiceInfo.JsonOptions))
+            .RequireRateLimiting(RateLimitPolicies.Metadata);
+
         app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
         app.MapGet("/health/ready", async (
             GameDataStore store,

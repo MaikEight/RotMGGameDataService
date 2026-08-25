@@ -335,6 +335,29 @@ The response reports the latest build IDs, check timestamps, whether a hint is
 pending, and whether the last refresh has an error. It never exposes the
 stored error message or secrets.
 
+## Get service information
+
+```http
+GET /info
+```
+
+```json
+{
+  "name": "EAM Game Assets API",
+  "version": "1.2.0",
+  "author": "TadusPro & MaikEight",
+  "description": "Publishes versioned Realm of the Mad God game data and rendered item sprites extracted from the official client.",
+  "lastRestart": "2026-08-25T02:33:02.487Z"
+}
+```
+
+The shape every EAM service publishes, so one probe can read them all. `version`
+is the release version the container image is tagged with. `lastRestart` is when
+this process started, captured once at startup and held in memory, in the format
+JavaScript's `Date.toISOString()` produces; it does not change until the process
+restarts. Behind two API replicas, a caller reaches one of them and sees that
+replica's start time.
+
 ## Health endpoints
 
 ```http
