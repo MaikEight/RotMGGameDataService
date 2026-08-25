@@ -133,8 +133,18 @@ public static class FameBonusXmlReader
         ReadBool(element, "Repeatable"),
         element.Elements("Condition").Select(ReadCondition).ToArray());
 
+    /// <summary>
+    /// Reads one condition. The type is the element's own text rather than a
+    /// named field.
+    /// </summary>
+    /// <remarks>
+    /// The threshold is taken verbatim even where the client disagrees with
+    /// itself, as it does on the per-biome kill bonuses whose descriptions name
+    /// ten times the threshold they declare. The game awards the bonus at the
+    /// threshold, so publishing anything else would put consumers out of step
+    /// with what a player sees in-game.
+    /// </remarks>
     private static FameConditionDefinition ReadCondition(XElement element) => new(
-        // The condition's type is the element's own text, not a named field.
         NullIfEmpty(element.Value) ?? string.Empty,
         ReadInt(element, "threshold"),
         ReadString(element, "stat"));

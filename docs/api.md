@@ -201,13 +201,17 @@ the repeat count.
 `description` are omitted when the client leaves them empty. The first two are
 what group the flat list for display.
 
-Every field is reproduced from the client as published. It is worth knowing that
-the client contradicts itself on the per-biome kill bonuses: the example above
-declares `threshold` 100 while its own description says 1000, and the same gap
-appears on the `Adversary` and `Slaughterer` tier of all 20 biomes. The service
-does not correct it, because the threshold is what the game evaluates against
-and rewriting it would be inventing data. A consumer that shows progress should
-prefer `threshold` and treat `description` as prose.
+Every value is reproduced exactly as the client declares it, including where the
+client disagrees with itself. The example above declares `threshold` 100 while
+its own description says 1000, and the same gap appears on the `Adversary` and
+`Slaughterer` tier of all 20 per-biome kill categories. The game awards the
+bonus at the threshold, so the threshold is what a character actually needs, and
+the service publishes it unchanged: a consumer that mirrors this API shows what
+the game shows. Correcting either value here would put every consumer out of
+step with the game.
+
+So `threshold` is the number to evaluate progress against, and `description` is
+prose that can be out of date with it.
 
 `objects` is deliberately neutral: the Realm client contains renderable
 equipment, tokens, portals, characters, and other object categories. A
